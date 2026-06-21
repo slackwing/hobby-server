@@ -1,7 +1,7 @@
 # Multi-stage build for hobby-server.
 
 # Stage 1: Build the Go binaries.
-FROM golang:1.23-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 RUN apk add --no-cache git
 WORKDIR /app
