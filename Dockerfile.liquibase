@@ -1,7 +1,10 @@
 # Dockerfile for Liquibase migrations.
+#
+# Per-project changelogs are mounted at runtime by install.sh — not baked
+# in — because hobby-server is multi-project and each project has its own
+# changelog dir at liquibase/<project>/changelog/. install.sh mounts the
+# right one per project via `-v $CHANGELOG_DIR:/liquibase/project:ro`.
 FROM liquibase/liquibase:4.25-alpine
-
-COPY liquibase/changelog /liquibase/changelog
 
 WORKDIR /liquibase
 
