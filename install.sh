@@ -1,22 +1,27 @@
 #!/usr/bin/env bash
-# rv-server installation script. Mirrors the install pattern of
-# github.com/slackwing/manuscript-studio (Docker + Liquibase + systemd-via-Docker).
+# hobby-server installation script. Mirrors the install pattern of
+# github.com/slackwing/manuscript-studio (Docker + Liquibase +
+# systemd-via-Docker).
+#
+# Multi-project: one binary, one container, but each configured project
+# in ~/.config/hobby-server/config.yaml has its own database and runs
+# its own Liquibase migrations against it.
 #
 # One-liner:
 #   bash <(curl -sSL -H "Cache-Control: no-cache" \
-#     https://raw.githubusercontent.com/slackwing/rv-server/main/install.sh)
+#     https://raw.githubusercontent.com/slackwing/hobby-server/main/install.sh)
 #
 # SCRIPT_VERSION: bump on EVERY change to this file.
 # Format: YYYY-MM-DD.N (N increments within the same day).
-SCRIPT_VERSION="2026-06-21.1"
+SCRIPT_VERSION="2026-06-21.2"
 
 set -euo pipefail
 
-CONFIG_DIR="$HOME/.config/rv-server"
+CONFIG_DIR="$HOME/.config/hobby-server"
 CONFIG_FILE="$CONFIG_DIR/config.yaml"
 CONFIG_SOURCE_TEMPLATE="config.example.yaml"
-REPO_URL="https://github.com/slackwing/rv-server"
-CONTAINER_NAME="rv-server"
+REPO_URL="https://github.com/slackwing/hobby-server"
+CONTAINER_NAME="hobby-server"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
@@ -29,7 +34,7 @@ INSTALL_LOG="$CONFIG_DIR/logs/install.log"
 {
     echo ""
     echo "================================================================"
-    echo "rv-server install run starting: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+    echo "hobby-server install run starting: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
     echo "Script version: $SCRIPT_VERSION"
     echo "User: $(whoami)@$(hostname)"
     echo "================================================================"
@@ -38,7 +43,7 @@ exec > >(tee -a "$INSTALL_LOG") 2>&1
 trap 'echo "Install finished: $(date -u +%Y-%m-%dT%H:%M:%SZ) exit=$?" >> "$INSTALL_LOG"' EXIT
 
 echo "========================================="
-echo "   rv-server installation"
+echo "   hobby-server installation"
 echo "   Script version: $SCRIPT_VERSION"
 echo "========================================="
 log_info "Config file: $CONFIG_FILE"
@@ -54,7 +59,7 @@ if [[ ! -f "$CONFIG_FILE" ]]; then
     log_warn "Config template written to $CONFIG_FILE"
     echo ""
     echo "Edit the file to set:"
-    echo "  - database.password (the rv_user Postgres password)"
+    echo "  - projects[].database.password (per project)"
     echo "  - server.env: production (default) or development"
     echo ""
     echo "Then re-run this script."
@@ -71,33 +76,50 @@ check_dep() {
 check_dep docker
 check_dep psql
 check_dep git
+check_dep python3
+# python3 must have yaml available so we can parse projects[]. Don't proceed
+# without it — bash YAML parsing is fragile, especially with nested lists.
+python3 -c 'import yaml' 2>/dev/null || log_error "python3-yaml (PyYAML) not installed. Install with: apt install python3-yaml  OR  pip install pyyaml"
+log_info "✓ python3+yaml"
 
 # ----- Step 3: Parse config -----
 log_step "Parsing config..."
-get_config() {
-    grep "^[[:space:]]*$1:" "$CONFIG_FILE" | head -1 | sed "s/.*$1:[[:space:]]*[\"']*\([^\"']*\)[\"']*/\1/"
-}
-DB_HOST=$(get_config "host")
-DB_PORT=$(get_config "port")
-DB_NAME=$(get_config "name")
-DB_USER=$(get_config "user")
-DB_PASSWORD=$(get_config "password")
-SERVER_PORT=$(get_config "port" | head -1)  # first `port:` is database; we need server port
-# Better: extract specifically from server: block
-SERVER_PORT=$(awk '/^server:/{flag=1;next} flag && /^[a-z]/{flag=0} flag && /port:/{print $2; exit}' "$CONFIG_FILE" | tr -d '"')
-[[ -z "$SERVER_PORT" ]] && SERVER_PORT=5002
-
-log_info "Database: $DB_USER@$DB_HOST:$DB_PORT/$DB_NAME"
+SERVER_PORT=$(python3 -c "import yaml,sys; c=yaml.safe_load(open('$CONFIG_FILE')); print(c.get('server',{}).get('port',5002))")
 log_info "Server port: $SERVER_PORT"
 
-# ----- Step 4: Database connectivity -----
-log_step "Testing database connection..."
-PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -c "SELECT 1;" >/dev/null 2>&1 || {
-    log_error "Cannot connect to database. Verify Cloud SQL Auth Proxy is running and database exists."
-}
-log_info "Database OK"
+# Project names, newline-separated.
+PROJECT_NAMES=$(python3 -c "import yaml; print('\n'.join(p['name'] for p in yaml.safe_load(open('$CONFIG_FILE')).get('projects',[])))")
+if [[ -z "$PROJECT_NAMES" ]]; then
+    log_error "No projects[] in config. Add at least one."
+fi
+log_info "Projects: $(echo $PROJECT_NAMES | tr '\n' ' ')"
 
-# ----- Step 5: Clone or pull this repo -----
+# For one project, dump host/port/name/user/password to stdout (tab-separated).
+project_db_info() {
+    local name="$1"
+    python3 -c "
+import yaml, sys
+c = yaml.safe_load(open('$CONFIG_FILE'))
+for p in c.get('projects', []):
+    if p['name'] == '$name':
+        d = p['database']
+        print('\t'.join([d['host'], str(d['port']), d['name'], d['user'], d['password']]))
+        sys.exit(0)
+sys.exit('project not found: $name')
+"
+}
+
+# ----- Step 4: Database connectivity (per project) -----
+log_step "Testing database connections..."
+for name in $PROJECT_NAMES; do
+    IFS=$'\t' read -r DB_HOST DB_PORT DB_NAME DB_USER DB_PASSWORD <<< "$(project_db_info "$name")"
+    PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -c "SELECT 1;" >/dev/null 2>&1 || {
+        log_error "Cannot connect to project '$name' DB: $DB_USER@$DB_HOST:$DB_PORT/$DB_NAME"
+    }
+    log_info "  ✓ $name: $DB_USER@$DB_HOST:$DB_PORT/$DB_NAME"
+done
+
+# ----- Step 5: Fetch source -----
 log_step "Fetching latest source..."
 SRC_DIR="$CONFIG_DIR/src"
 if [[ -d "$SRC_DIR/.git" ]]; then
@@ -110,27 +132,40 @@ else
 fi
 
 # ----- Step 6: Build images -----
-log_step "Building rv-server image..."
-docker build -q -t rv-server:latest "$SRC_DIR" >/dev/null
-log_info "✓ rv-server image"
+log_step "Building hobby-server image..."
+docker build -q -t hobby-server:latest "$SRC_DIR" >/dev/null
+log_info "✓ hobby-server image"
 
-log_step "Building rv-server-liquibase image..."
-docker build -q -f "$SRC_DIR/Dockerfile.liquibase" -t rv-server-liquibase:latest "$SRC_DIR" >/dev/null
+log_step "Building hobby-server-liquibase image..."
+docker build -q -f "$SRC_DIR/Dockerfile.liquibase" -t hobby-server-liquibase:latest "$SRC_DIR" >/dev/null
 log_info "✓ liquibase image"
 
-# ----- Step 7: Run migrations -----
+# ----- Step 7: Run migrations (per project) -----
+# Each project has its own changelog under liquibase/<name>/changelog/.
+# Verify the directory exists for every project, then run Liquibase once
+# per project against that project's DB.
 log_step "Running Liquibase migrations..."
-docker run --rm \
-    --network host \
-    rv-server-liquibase:latest \
-    --changeLogFile=changelog/db.changelog-master.xml \
-    --url="jdbc:postgresql://$DB_HOST:$DB_PORT/$DB_NAME" \
-    --username="$DB_USER" \
-    --password="$DB_PASSWORD" \
-    update || log_warn "Migrations exit nonzero (already up-to-date is fine)"
+for name in $PROJECT_NAMES; do
+    CHANGELOG_DIR="$SRC_DIR/liquibase/$name"
+    if [[ ! -d "$CHANGELOG_DIR/changelog" ]]; then
+        log_error "No liquibase changelog dir for project '$name' at $CHANGELOG_DIR/changelog"
+    fi
+    IFS=$'\t' read -r DB_HOST DB_PORT DB_NAME DB_USER DB_PASSWORD <<< "$(project_db_info "$name")"
+    log_info "  [$name] migrating $DB_NAME..."
+    docker run --rm \
+        --network host \
+        -v "$CHANGELOG_DIR:/liquibase/project:ro" \
+        hobby-server-liquibase:latest \
+        --searchPath=/liquibase/project \
+        --changeLogFile=changelog/db.changelog-master.xml \
+        --url="jdbc:postgresql://$DB_HOST:$DB_PORT/$DB_NAME" \
+        --username="$DB_USER" \
+        --password="$DB_PASSWORD" \
+        update || log_warn "  [$name] migrations exit nonzero (already up-to-date is fine)"
+done
 
 # ----- Step 8: Restart server container -----
-log_step "Starting rv-server..."
+log_step "Starting hobby-server..."
 if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
     docker stop "$CONTAINER_NAME" >/dev/null 2>&1 || true
     docker rm "$CONTAINER_NAME" >/dev/null 2>&1 || true
@@ -141,12 +176,12 @@ docker run -d \
     --restart unless-stopped \
     --network host \
     -v "$CONFIG_FILE:/config/config.yaml:ro" \
-    rv-server:latest \
-    rv-server --config /config/config.yaml || log_error "Failed to start container"
+    hobby-server:latest \
+    hobby-server --config /config/config.yaml || log_error "Failed to start container"
 
 sleep 2
 if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-    log_info "✓ rv-server running on :$SERVER_PORT"
+    log_info "✓ hobby-server running on :$SERVER_PORT (projects: $(echo $PROJECT_NAMES | tr '\n' ' '))"
 else
     log_error "Container failed to start. Check: docker logs $CONTAINER_NAME"
 fi
@@ -155,8 +190,13 @@ echo ""
 log_info "Installation complete."
 echo ""
 echo "Next steps:"
-echo "  1. Add a user:"
-echo "     docker run --rm --network host -v \"$CONFIG_FILE:/config/config.yaml:ro\" rv-server:latest add-user --config /config/config.yaml <username> <password>"
-echo "  2. Verify Apache proxies /rv/api/* to 127.0.0.1:$SERVER_PORT"
-echo "  3. Test: curl -sS http://127.0.0.1:$SERVER_PORT/healthz"
+for name in $PROJECT_NAMES; do
+    echo "  - Add a user to project '$name':"
+    echo "      docker run --rm --network host \\"
+    echo "        -v \"$CONFIG_FILE:/config/config.yaml:ro\" \\"
+    echo "        hobby-server:latest \\"
+    echo "        add-user --config /config/config.yaml --project $name <username> <password>"
+done
+echo "  - Verify Apache proxies your public URLs to 127.0.0.1:$SERVER_PORT"
+echo "  - Test:  curl -sS http://127.0.0.1:$SERVER_PORT/healthz"
 echo ""

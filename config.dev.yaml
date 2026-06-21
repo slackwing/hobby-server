@@ -1,13 +1,22 @@
-# Local dev config. Use a local Postgres (or the Cloud SQL Auth Proxy on
-# port 5433 if running alongside manuscript-studio's dev container).
-
-database:
-  host: "localhost"
-  port: 5433
-  name: "rv_trip"
-  user: "rv_user"
-  password: "devpass"
+# Local dev config. Use a local Postgres on port 5433.
+#
+# Spin it up:
+#   docker run -d --name hobby-pg -p 5433:5432 \
+#     -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=devpass \
+#     postgres:16-alpine
+#   # then connect and CREATE DATABASE rv_trip_dev; etc.
 
 server:
   port: 5002
   env: "development"
+
+projects:
+  - name: rv
+    database:
+      host: "localhost"
+      port: 5433
+      name: "rv_trip_dev"
+      user: "postgres"
+      password: "devpass"
+    url_prefix: "/api/rv"
+    cookie_path: "/rv/"

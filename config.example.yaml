@@ -1,22 +1,5 @@
-# rv-server configuration.
-# Copy to ~/.config/rv-server/config.yaml and edit.
-
-# ============================================================
-# Database Connection
-# ============================================================
-# For GCP Cloud SQL, use the address exposed by the Cloud SQL Auth Proxy
-# (typically 127.0.0.1:5432 on the VM).
-# The database must already exist:
-#   CREATE DATABASE rv_trip;
-#   CREATE USER rv_user WITH PASSWORD '...';
-#   GRANT ALL PRIVILEGES ON DATABASE rv_trip TO rv_user;
-# Liquibase will create tables automatically.
-database:
-  host: "127.0.0.1"
-  port: 5432
-  name: "rv_trip"
-  user: "rv_user"
-  password: "REPLACE_ME"
+# hobby-server configuration.
+# Copy to ~/.config/hobby-server/config.yaml and edit.
 
 # ============================================================
 # Server
@@ -24,3 +7,45 @@ database:
 server:
   port: 5002
   env: "production"   # "production" sets Secure cookies; "development" doesn't
+
+# ============================================================
+# Projects
+# ============================================================
+# Each project gets its own database, URL prefix, and cookie scope.
+# The schema for each project lives at liquibase/<name>/changelog/
+# (run by install.sh's Liquibase pass).
+#
+# For each project, create the database first:
+#   CREATE DATABASE <name>_db;
+#   CREATE USER <name>_user WITH PASSWORD '...';
+#   GRANT ALL PRIVILEGES ON DATABASE <name>_db TO <name>_user;
+#   \c <name>_db
+#   GRANT ALL ON SCHEMA public TO <name>_user;
+#
+# Then add the project below and re-run install.sh.
+
+projects:
+  - name: rv
+    database:
+      host: "127.0.0.1"        # Cloud SQL Auth Proxy
+      port: 5432
+      name: "rv_trip"
+      user: "rv_user"
+      password: "REPLACE_ME"
+    # Public path is andrewcheong.com/rv/api/* ; Apache proxies that to
+    # 127.0.0.1:5002/api/rv/* . The server sees the post-Apache path,
+    # so url_prefix should match what the server is asked.
+    url_prefix: "/api/rv"
+    cookie_path: "/rv/"
+
+  # Add additional projects here:
+  #
+  # - name: next_thing
+  #   database:
+  #     host: "127.0.0.1"
+  #     port: 5432
+  #     name: "next_thing_db"
+  #     user: "next_thing_user"
+  #     password: "REPLACE_ME"
+  #   url_prefix: "/api/next_thing"
+  #   cookie_path: "/next_thing/"

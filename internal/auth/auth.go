@@ -1,9 +1,12 @@
 // Package auth handles password hashing and DB-backed cookie sessions.
 //
+// Each project has its own database with `user` and `session` tables —
+// SessionStore is instantiated per-project against that project's pool.
+// Cookie names are project-scoped so multiple projects don't share an
+// auth cookie surface.
+//
 // Mirrors github.com/slackwing/manuscript-studio/internal/auth (trimmed:
-// no CSRF tokens for now since we have no state-changing endpoints; no
-// per-manuscript scoping). Tokens live in the `session` table so they
-// survive process restarts.
+// no CSRF tokens for now since we have no state-changing endpoints).
 package auth
 
 import (
@@ -181,10 +184,12 @@ func LookupUser(pool *pgxpool.Pool, username string) (string, bool, error) {
 }
 
 // Middleware requires a valid session cookie. Returns 401 otherwise.
-func Middleware(store *SessionStore) func(http.Handler) http.Handler {
+// cookieName is project-scoped (e.g. "rv_session", "next_session") so
+// projects don't share a cookie surface.
+func Middleware(store *SessionStore, cookieName string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			cookie, err := r.Cookie("rv_session")
+			cookie, err := r.Cookie(cookieName)
 			if err != nil {
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return

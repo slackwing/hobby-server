@@ -1,13 +1,22 @@
-// rv-server: authentication backend for the RV trip site.
+// hobby-server: multi-project auth + storage backend.
 //
-// Frontend lives at github.com/slackwing/feathers under
-// foundry/website/html/rv/. Apache reverse-proxies /rv/api/* to this
-// server (default port 5002).
+// One process, one binary, multiple project namespaces. Each project
+// has its own database (with its own `user` and `session` tables), its
+// own URL prefix on this server, and its own cookie scope.
 //
-// Endpoints (all under /api/):
-//   POST /api/login   {username, password}  → sets rv_session cookie
-//   POST /api/logout                         → clears cookie + deletes session
-//   GET  /api/me                             → {username} when logged in, 401 otherwise
+// Mounted endpoints for each project P configured in
+// ~/.config/hobby-server/config.yaml (URL paths shown relative to the
+// project's URLPrefix):
+//
+//   POST <prefix>/login    {username, password}  → sets <name>_session cookie
+//   POST <prefix>/logout                           → clears cookie + deletes session
+//   GET  <prefix>/me                               → {username} when logged in, 401 otherwise
+//
+// Apache reverse-proxies the public URL slice to this server. For the
+// "rv" project with url_prefix "/api/rv", Apache maps
+// andrewcheong.com/rv/api/* → 127.0.0.1:5002/api/rv/*.
+//
+// Also: GET /healthz (no auth, used by Docker healthcheck).
 package main
 
 import (
@@ -27,10 +36,15 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/slackwing/rv-server/internal/auth"
-	"github.com/slackwing/rv-server/internal/config"
-	"github.com/slackwing/rv-server/internal/database"
+	"github.com/slackwing/hobby-server/internal/auth"
+	"github.com/slackwing/hobby-server/internal/config"
+	"github.com/slackwing/hobby-server/internal/database"
 )
+
+// secureCookies is set once at startup based on cfg.Server.Env.
+// Package-level because every cookie write needs it and we don't want
+// to thread it through every signature.
+var secureCookies bool
 
 func main() {
 	var configPath string
@@ -41,18 +55,37 @@ func main() {
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
-	log.Printf("rv-server starting on :%d (env=%s)", cfg.Server.Port, cfg.Server.Env)
+	secureCookies = cfg.Server.Env == "production"
+	log.Printf("hobby-server starting on :%d (env=%s, projects=%d, secure_cookies=%v)",
+		cfg.Server.Port, cfg.Server.Env, len(cfg.Projects), secureCookies)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	pool, err := database.NewPool(ctx, cfg.PostgresDSN())
-	if err != nil {
-		log.Fatalf("connect db: %v", err)
+	// Per-project (pool, store, cookie name). Each project's pool talks
+	// to a DIFFERENT database; nothing shared at the DB layer.
+	type projectState struct {
+		project    config.Project
+		pool       *pgxpool.Pool
+		store      *auth.SessionStore
+		cookieName string
 	}
-	defer pool.Close()
-
-	store := auth.NewSessionStore(pool)
+	states := make([]projectState, 0, len(cfg.Projects))
+	for _, p := range cfg.Projects {
+		pool, err := database.NewPool(ctx, p.PostgresDSN())
+		if err != nil {
+			log.Fatalf("project %s: connect db: %v", p.Name, err)
+		}
+		defer pool.Close()
+		states = append(states, projectState{
+			project:    p,
+			pool:       pool,
+			store:      auth.NewSessionStore(pool),
+			cookieName: p.Name + "_session",
+		})
+		log.Printf("project %q ready: db=%s url_prefix=%s cookie=%s_session cookie_path=%s",
+			p.Name, p.Database.Name, p.URLPrefix, p.Name, p.CookiePath)
+	}
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -61,11 +94,15 @@ func main() {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(15 * time.Second))
 
-	r.Route("/api", func(r chi.Router) {
-		r.Post("/login", handleLogin(pool, store, cfg))
-		r.Post("/logout", handleLogout(store, cfg))
-		r.Get("/me", handleMe(store))
-	})
+	// One sub-router per project, mounted at the configured URL prefix.
+	for _, s := range states {
+		s := s // capture in closure
+		r.Route(s.project.URLPrefix, func(sub chi.Router) {
+			sub.Post("/login", handleLogin(s.pool, s.store, s.project, s.cookieName))
+			sub.Post("/logout", handleLogout(s.store, s.project, s.cookieName))
+			sub.Get("/me", handleMe(s.store, s.cookieName))
+		})
+	}
 
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -94,7 +131,7 @@ func main() {
 
 func defaultConfigPath() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".config", "rv-server", "config.yaml")
+	return filepath.Join(home, ".config", "hobby-server", "config.yaml")
 }
 
 // ---------- handlers ----------
@@ -104,7 +141,7 @@ type loginReq struct {
 	Password string `json:"password"`
 }
 
-func handleLogin(pool *pgxpool.Pool, store *auth.SessionStore, cfg *config.Config) http.HandlerFunc {
+func handleLogin(pool *pgxpool.Pool, store *auth.SessionStore, project config.Project, cookieName string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req loginReq
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -117,13 +154,12 @@ func handleLogin(pool *pgxpool.Pool, store *auth.SessionStore, cfg *config.Confi
 		}
 		hash, ok, err := auth.LookupUser(pool, req.Username)
 		if err != nil {
-			log.Printf("login lookup error: %v", err)
+			log.Printf("[%s] login lookup error: %v", project.Name, err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
 		// Constant-time-ish: always do a bcrypt comparison to avoid leaking
-		// user existence via timing. If the user doesn't exist, compare
-		// against a known dummy hash.
+		// user existence via timing.
 		if !ok {
 			auth.VerifyPassword(req.Password, dummyHash)
 			http.Error(w, "invalid credentials", http.StatusUnauthorized)
@@ -135,28 +171,28 @@ func handleLogin(pool *pgxpool.Pool, store *auth.SessionStore, cfg *config.Confi
 		}
 		token, err := store.Create(req.Username)
 		if err != nil {
-			log.Printf("session create error: %v", err)
+			log.Printf("[%s] session create error: %v", project.Name, err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		setSessionCookie(w, token, cfg)
+		setSessionCookie(w, token, project, cookieName, false)
 		writeJSON(w, http.StatusOK, map[string]string{"username": req.Username})
 	}
 }
 
-func handleLogout(store *auth.SessionStore, cfg *config.Config) http.HandlerFunc {
+func handleLogout(store *auth.SessionStore, project config.Project, cookieName string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if cookie, err := r.Cookie("rv_session"); err == nil {
+		if cookie, err := r.Cookie(cookieName); err == nil {
 			store.Delete(cookie.Value)
 		}
-		clearSessionCookie(w, cfg)
+		setSessionCookie(w, "", project, cookieName, true) // clear
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
-func handleMe(store *auth.SessionStore) http.HandlerFunc {
+func handleMe(store *auth.SessionStore, cookieName string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		cookie, err := r.Cookie("rv_session")
+		cookie, err := r.Cookie(cookieName)
 		if err != nil {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
@@ -170,32 +206,23 @@ func handleMe(store *auth.SessionStore) http.HandlerFunc {
 	}
 }
 
-// ---------- cookie + json helpers ----------
-
-func setSessionCookie(w http.ResponseWriter, token string, cfg *config.Config) {
-	secure := cfg.Server.Env == "production"
+// setSessionCookie sets the project's session cookie. Pass clear=true to
+// expire it immediately.
+func setSessionCookie(w http.ResponseWriter, token string, project config.Project, cookieName string, clear bool) {
+	expires := time.Now().Add(auth.SessionTTL)
+	maxAge := int(auth.SessionTTL.Seconds())
+	if clear {
+		expires = time.Unix(0, 0)
+		maxAge = -1
+	}
 	http.SetCookie(w, &http.Cookie{
-		Name:     "rv_session",
+		Name:     cookieName,
 		Value:    token,
-		Path:     "/rv/", // scoped under /rv/ so we don't bleed into other apps on the domain
-		Expires:  time.Now().Add(auth.SessionTTL),
-		MaxAge:   int(auth.SessionTTL.Seconds()),
+		Path:     project.CookiePath,
+		Expires:  expires,
+		MaxAge:   maxAge,
 		HttpOnly: true,
-		Secure:   secure,
-		SameSite: http.SameSiteLaxMode,
-	})
-}
-
-func clearSessionCookie(w http.ResponseWriter, cfg *config.Config) {
-	secure := cfg.Server.Env == "production"
-	http.SetCookie(w, &http.Cookie{
-		Name:     "rv_session",
-		Value:    "",
-		Path:     "/rv/",
-		Expires:  time.Unix(0, 0),
-		MaxAge:   -1,
-		HttpOnly: true,
-		Secure:   secure,
+		Secure:   secureCookies,
 		SameSite: http.SameSiteLaxMode,
 	})
 }

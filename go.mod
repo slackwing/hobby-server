@@ -1,4 +1,4 @@
-module github.com/slackwing/rv-server
+module github.com/slackwing/hobby-server
 
 go 1.25
 

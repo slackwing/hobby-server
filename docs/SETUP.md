@@ -1,26 +1,35 @@
-# Setup walkthrough: rv-server on the production VM
+# Setup walkthrough: hobby-server on the production VM
 
-A first-time guide for Andrew. Follows the same flow as
-manuscript-studio's install, with rv-specific paths/ports/db.
+First-time guide for Andrew. Follows the same flow as
+manuscript-studio's install: Docker images, Liquibase, container runs
+with `--restart unless-stopped`.
 
-Most of this is **identical to what you already did for
-manuscript-studio**. The only new bits are: a new database in Cloud SQL,
-a new Apache `<Location>` block, a new VM systemd-via-Docker container.
+hobby-server is **multi-project**: this guide covers setting up the
+**rv** project, but the same steps apply for each new project (just
+swap names).
+
+Most of this should be familiar from manuscript-studio. The pieces
+that are new (or different):
+
+- One config file lists multiple projects under `projects:`.
+- One Liquibase pass per project (against that project's DB).
+- One Apache `<Location>` block per project.
 
 ## Prerequisites
 
 Already on the VM (you set these up for manuscript-studio):
 - Docker
 - `psql` client
+- `python3` + `python3-yaml` (PyYAML) — install.sh uses it to parse
+  the config. `apt install python3-yaml` or `pip3 install pyyaml`.
 - Cloud SQL Auth Proxy running, exposing Postgres on `127.0.0.1:5432`
 - Apache serving andrewcheong.com/rv (static files via rsync)
 
-## Step 1 — Create the database
+## Step 1 — Create the rv project's database
 
-SSH to the VM (or use Cloud SQL Shell), then:
+SSH to the VM (or use Cloud SQL Shell):
 
 ```bash
-# Connect via the auth proxy (which is already running):
 psql -h 127.0.0.1 -p 5432 -U postgres
 ```
 
@@ -37,78 +46,86 @@ GRANT ALL PRIVILEGES ON DATABASE rv_trip TO rv_user;
 GRANT ALL ON SCHEMA public TO rv_user;
 ```
 
-Save the password — you'll paste it into the config in step 2.
+Save the password.
 
 ## Step 2 — Run the install script
 
 On the VM:
 
 ```bash
-deploy_latest_rv_server() {
+deploy_latest_hobby_server() {
   bash <(curl -sSL -H "Cache-Control: no-cache" \
-    "https://raw.githubusercontent.com/slackwing/rv-server/main/install.sh")
+    "https://raw.githubusercontent.com/slackwing/hobby-server/main/install.sh")
 }
-deploy_latest_rv_server
+deploy_latest_hobby_server
 ```
 
-First run: it'll write `~/.config/rv-server/config.yaml` and exit.
+First run: writes `~/.config/hobby-server/config.yaml` (a template
+listing only the rv project) and exits.
 
-Edit `~/.config/rv-server/config.yaml` and set:
-- `database.password` — the password you set in step 1
-- `server.env: production` (already the default)
+Edit `~/.config/hobby-server/config.yaml`:
+- Under `projects.[name=rv].database.password`: paste the password
+  from step 1.
+- `server.env: production` (already the default).
 
-Re-run `deploy_latest_rv_server`. This time it'll:
-- Test the DB connection
-- Build the Docker images
-- Run Liquibase to create the `user` and `session` tables
-- Start the container (`docker run --restart unless-stopped`)
+Re-run `deploy_latest_hobby_server`. This time:
+- Tests the rv DB connection
+- Builds the Docker images
+- Runs Liquibase against `rv_trip` (creates `user`, `session` tables)
+- Starts the container (`docker run --restart unless-stopped`)
 
 When done, verify:
 
 ```bash
-curl -sS http://127.0.0.1:5002/healthz   # should print "ok"
-docker ps | grep rv-server                # should show running
+curl -sS http://127.0.0.1:5002/healthz   # → "ok"
+docker ps | grep hobby-server             # → running
+docker logs hobby-server | tail -20       # see 'project "rv" ready'
 ```
 
-## Step 3 — Add the two users
+## Step 3 — Add the two RV users
 
 ```bash
 docker run --rm --network host \
-  -v "$HOME/.config/rv-server/config.yaml:/config/config.yaml:ro" \
-  rv-server:latest \
-  add-user --config /config/config.yaml abi beeboweebo
+  -v "$HOME/.config/hobby-server/config.yaml:/config/config.yaml:ro" \
+  hobby-server:latest \
+  add-user --config /config/config.yaml --project rv abi beeboweebo
 
 docker run --rm --network host \
-  -v "$HOME/.config/rv-server/config.yaml:/config/config.yaml:ro" \
-  rv-server:latest \
-  add-user --config /config/config.yaml andrew quailtail
+  -v "$HOME/.config/hobby-server/config.yaml:/config/config.yaml:ro" \
+  hobby-server:latest \
+  add-user --config /config/config.yaml --project rv andrew quailtail
 ```
 
-Each command upserts (insert or overwrite password). Re-run with a
-different password later to rotate.
+Each command upserts (insert or overwrite password). To rotate, re-run
+with the new password.
 
-## Step 4 — Apache proxy block
+## Step 4 — Apache proxy block for the rv project
 
-Add to your andrewcheong.com vhost (probably `/etc/apache2/sites-enabled/000-default-le-ssl.conf`
-or similar — wherever the existing `/rv` static config lives):
+The frontend calls `/rv/api/*`. The server mounts the rv project at
+`/api/rv/*`. So Apache needs to map: public `/rv/api/` → backend
+`/api/rv/`.
+
+Add to your andrewcheong.com vhost (probably
+`/etc/apache2/sites-enabled/000-default-le-ssl.conf` or similar):
 
 ```apache
-# rv-server backend (login + sessions)
+# hobby-server backend (rv project)
 ProxyRequests Off
 ProxyPreserveHost On
 
 <Location /rv/api/>
-    ProxyPass        http://127.0.0.1:5002/api/
-    ProxyPassReverse http://127.0.0.1:5002/api/
+    ProxyPass        http://127.0.0.1:5002/api/rv/
+    ProxyPassReverse http://127.0.0.1:5002/api/rv/
 </Location>
 ```
 
-Important notes:
-- The trailing slash on **both sides** of `ProxyPass` matters.
-- We're stripping the `/rv` prefix as the request crosses to the Go
-  server (so `/rv/api/login` → `/api/login`).
-- The Go server doesn't serve any static content. Apache continues
-  serving `/rv/*` files (index.html, prep.html, assets/, etc.) directly.
+Notes:
+- Trailing slashes on **both sides** of `ProxyPass` matter.
+- We strip the public `/rv` prefix and add the backend `/api/rv`
+  prefix as the request crosses to the Go server (so
+  `/rv/api/login` → `/api/rv/login`).
+- The Go server doesn't serve static content. Apache continues serving
+  `/rv/*` files (index.html, prep.html, assets/, etc.) directly.
 
 Make sure `mod_proxy` and `mod_proxy_http` are enabled:
 ```bash
@@ -126,44 +143,72 @@ sudo systemctl reload apache2
 From your laptop:
 
 ```bash
-# 1. Healthcheck through Apache:
-curl -sS https://andrewcheong.com/rv/api/me     # should be 401 Unauthorized
+# 1. /me without cookie → 401
+curl -sS https://andrewcheong.com/rv/api/me
 
 # 2. Log in:
 curl -sS -c /tmp/cookies.txt -X POST \
   -H 'Content-Type: application/json' \
   -d '{"username":"abi","password":"beeboweebo"}' \
-  https://andrewcheong.com/rv/api/login        # should be {"username":"abi"}
+  https://andrewcheong.com/rv/api/login
+# → {"username":"abi"}
 
-# 3. Check me with the cookie:
+# 3. /me with cookie:
 curl -sS -b /tmp/cookies.txt https://andrewcheong.com/rv/api/me
-                                                # should be {"username":"abi"}
+# → {"username":"abi"}
 
 # 4. Log out:
 curl -sS -b /tmp/cookies.txt -X POST \
-  https://andrewcheong.com/rv/api/logout       # 204 No Content
+  https://andrewcheong.com/rv/api/logout
+# → 204 No Content
 ```
 
 Then load https://andrewcheong.com/rv in your browser:
-- Top-right corner: a "Log in" button (left of °C/°F).
-- The "prep checklist" link in the subtitle/footer should be HIDDEN
-  until you log in.
-- Click "Log in", enter `abi` / `beeboweebo`, modal closes, prep link
-  appears, button now reads "abi · Log out".
-- Click again → "Log out?" confirm → logs out.
+- Top-right corner: "Log in" button (left of °C/°F)
+- "Prep checklist" link hidden until you log in
+- Log in with `abi` / `beeboweebo` → modal closes, prep link appears,
+  button reads "abi · Log out"
+- Click → "Log out?" confirm → logs out
+
+## Adding a second project later
+
+Say you start `next_thing`. Steps:
+
+1. **DB**: `CREATE DATABASE next_thing_db;` + user + grants (same as
+   step 1 above).
+2. **Schema**: in this repo, `mkdir -p liquibase/next_thing/changelog/`
+   + `db.changelog-master.xml` + at least one changeset (copy the
+   `liquibase/rv/changelog/` template).
+3. **Push** the new schema dir to GitHub main.
+4. **Edit** `~/.config/hobby-server/config.yaml` and append:
+   ```yaml
+     - name: next_thing
+       database:
+         host: "127.0.0.1"
+         port: 5432
+         name: "next_thing_db"
+         user: "next_thing_user"
+         password: "<from step 1>"
+       url_prefix: "/api/next_thing"
+       cookie_path: "/next_thing/"
+   ```
+5. **Re-run** `deploy_latest_hobby_server` on the VM. Liquibase will
+   migrate the new DB; the server will pick up the new project on
+   startup.
+6. **Add users**: `add-user --project next_thing <user> <pass>`
+7. **Apache**: add a new `<Location /next_thing/api/>` block matching
+   the rv pattern but with `/api/next_thing/` as the backend.
 
 ## Future redeploys
 
-Any time you push a change to `slackwing/rv-server` main:
-
 ```bash
-deploy_latest_rv_server
+deploy_latest_hobby_server
 ```
 
 The script:
-1. Pulls latest source into `~/.config/rv-server/src/`
+1. Pulls latest source into `~/.config/hobby-server/src/`
 2. Rebuilds the Docker images
-3. Runs Liquibase (idempotent — no-op if schema is current)
+3. Runs Liquibase per project (idempotent — no-op if up-to-date)
 4. Restarts the container
 
 ## Troubleshooting
@@ -172,14 +217,20 @@ The script:
   returns 404** → Apache config not applied. Run `apachectl configtest`
   and `systemctl reload apache2`.
 
-- **`docker logs rv-server` shows DB connection refused** → Cloud SQL
-  Auth Proxy isn't running, or the password in `config.yaml` is wrong.
+- **`docker logs hobby-server` shows DB connection refused for project
+  X** → Cloud SQL Auth Proxy isn't running, or the password in
+  `config.yaml` for that project is wrong.
 
 - **Login returns 401 with the right credentials** → either the user
-  wasn't added (check `psql -d rv_trip -c 'SELECT username FROM "user";'`)
-  or the password is mistyped. Re-run `add-user` to reset.
+  wasn't added (check `psql -d <project_db> -c 'SELECT username FROM "user";'`)
+  or the password is mistyped. Re-run `add-user --project ...` to
+  reset.
 
 - **Cookie isn't being set** → check the browser dev tools Network tab
   for the login response. `Set-Cookie` must be present. If the site is
-  on HTTP rather than HTTPS in development, set `server.env: development`
+  HTTP rather than HTTPS in development, set `server.env: development`
   in config so the `Secure` flag is dropped.
+
+- **install.sh fails on `python3-yaml`** → install it with
+  `sudo apt install python3-yaml` (Debian/Ubuntu) or
+  `pip3 install pyyaml`.

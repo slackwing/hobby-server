@@ -1,10 +1,11 @@
-// add-user: insert (or overwrite) a user in the `user` table.
+// add-user: insert (or overwrite) a user in a project's `user` table.
 //
 // Usage:
-//   add-user <username> <password>
+//   add-user --project <name> [--config <path>] <username> <password>
 //
-// Reads the same ~/.config/rv-server/config.yaml as the server for DB
-// credentials. Bcrypt-hashes the password before storing.
+// Reads the same ~/.config/hobby-server/config.yaml as the server.
+// The --project flag selects which configured project's database to
+// write to. Bcrypt-hashes the password before storing.
 package main
 
 import (
@@ -15,19 +16,20 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/slackwing/rv-server/internal/auth"
-	"github.com/slackwing/rv-server/internal/config"
-	"github.com/slackwing/rv-server/internal/database"
+	"github.com/slackwing/hobby-server/internal/auth"
+	"github.com/slackwing/hobby-server/internal/config"
+	"github.com/slackwing/hobby-server/internal/database"
 )
 
 func main() {
-	var configPath string
+	var configPath, projectName string
 	flag.StringVar(&configPath, "config", defaultConfigPath(), "path to config.yaml")
+	flag.StringVar(&projectName, "project", "", "project name (must match a configured project)")
 	flag.Parse()
 
 	args := flag.Args()
-	if len(args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: add-user [--config <path>] <username> <password>")
+	if projectName == "" || len(args) != 2 {
+		fmt.Fprintln(os.Stderr, "usage: add-user --project <name> [--config <path>] <username> <password>")
 		os.Exit(2)
 	}
 	username, password := args[0], args[1]
@@ -39,10 +41,16 @@ func main() {
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
+	project := cfg.FindProject(projectName)
+	if project == nil {
+		log.Fatalf("project %q not found in config (configured: %v)",
+			projectName, projectNames(cfg))
+	}
+
 	ctx := context.Background()
-	pool, err := database.NewPool(ctx, cfg.PostgresDSN())
+	pool, err := database.NewPool(ctx, project.PostgresDSN())
 	if err != nil {
-		log.Fatalf("connect db: %v", err)
+		log.Fatalf("connect db (project %s): %v", projectName, err)
 	}
 	defer pool.Close()
 
@@ -51,7 +59,6 @@ func main() {
 		log.Fatalf("hash password: %v", err)
 	}
 
-	// Upsert: insert or update password_hash if user already exists.
 	_, err = pool.Exec(ctx, `
 		INSERT INTO "user" (username, password_hash, created_at)
 		VALUES ($1, $2, NOW())
@@ -60,10 +67,18 @@ func main() {
 	if err != nil {
 		log.Fatalf("upsert user: %v", err)
 	}
-	fmt.Printf("user %q upserted\n", username)
+	fmt.Printf("user %q upserted in project %q (db=%s)\n", username, projectName, project.Database.Name)
 }
 
 func defaultConfigPath() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".config", "rv-server", "config.yaml")
+	return filepath.Join(home, ".config", "hobby-server", "config.yaml")
+}
+
+func projectNames(cfg *config.Config) []string {
+	out := make([]string, len(cfg.Projects))
+	for i, p := range cfg.Projects {
+		out[i] = p.Name
+	}
+	return out
 }
