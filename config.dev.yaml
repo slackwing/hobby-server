@@ -1,0 +1,13 @@
+# Local dev config. Use a local Postgres (or the Cloud SQL Auth Proxy on
+# port 5433 if running alongside manuscript-studio's dev container).
+
+database:
+  host: "localhost"
+  port: 5433
+  name: "rv_trip"
+  user: "rv_user"
+  password: "devpass"
+
+server:
+  port: 5002
+  env: "development"

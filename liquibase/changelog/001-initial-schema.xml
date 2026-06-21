@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        Initial schema for rv-server. Two tables:
+          - "user": bcrypt-hashed credentials. Quoted because `user` is a
+            reserved word in some SQL contexts; quote in every reference.
+          - "session": cookie-token-keyed sessions, sliding 30-day TTL.
+
+        Future changes go in 002+, never edit 001.
+    -->
+
+    <changeSet id="001-initial-schema" author="rv-server">
+
+        <createTable tableName="user">
+            <column name="username" type="VARCHAR(50)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="password_hash" type="VARCHAR(255)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <createTable tableName="session">
+            <column name="id" type="VARCHAR(64)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="username" type="VARCHAR(50)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+            <column name="expires_at" type="TIMESTAMPTZ">
+                <constraints nullable="false"/>
+            </column>
+            <column name="last_activity_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <createIndex tableName="session" indexName="idx_session_expires_at">
+            <column name="expires_at"/>
+        </createIndex>
+
+        <createIndex tableName="session" indexName="idx_session_username">
+            <column name="username"/>
+        </createIndex>
+
+        <addForeignKeyConstraint
+            constraintName="fk_session_user"
+            baseTableName="session" baseColumnNames="username"
+            referencedTableName="user" referencedColumnNames="username"
+            onDelete="CASCADE"/>
+
+    </changeSet>
+
+</databaseChangeLog>

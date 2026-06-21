@@ -1,0 +1,8 @@
+# Dockerfile for Liquibase migrations.
+FROM liquibase/liquibase:4.25-alpine
+
+COPY liquibase/changelog /liquibase/changelog
+
+WORKDIR /liquibase
+
+ENTRYPOINT ["liquibase"]

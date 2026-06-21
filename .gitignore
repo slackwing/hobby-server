@@ -1,0 +1,16 @@
+# Build artifacts (binaries at repo root, NOT under cmd/)
+/rv-server
+/add-user
+*.test
+*.out
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Local secrets — production config.yaml lives in ~/.config/rv-server/,
+# NEVER in the repo.
+
+# OS junk
+.DS_Store

@@ -1,0 +1,26 @@
+# rv-server configuration.
+# Copy to ~/.config/rv-server/config.yaml and edit.
+
+# ============================================================
+# Database Connection
+# ============================================================
+# For GCP Cloud SQL, use the address exposed by the Cloud SQL Auth Proxy
+# (typically 127.0.0.1:5432 on the VM).
+# The database must already exist:
+#   CREATE DATABASE rv_trip;
+#   CREATE USER rv_user WITH PASSWORD '...';
+#   GRANT ALL PRIVILEGES ON DATABASE rv_trip TO rv_user;
+# Liquibase will create tables automatically.
+database:
+  host: "127.0.0.1"
+  port: 5432
+  name: "rv_trip"
+  user: "rv_user"
+  password: "REPLACE_ME"
+
+# ============================================================
+# Server
+# ============================================================
+server:
+  port: 5002
+  env: "production"   # "production" sets Secure cookies; "development" doesn't
