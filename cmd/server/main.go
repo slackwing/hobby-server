@@ -39,6 +39,7 @@ import (
 	"github.com/slackwing/hobby-server/internal/auth"
 	"github.com/slackwing/hobby-server/internal/config"
 	"github.com/slackwing/hobby-server/internal/database"
+	"github.com/slackwing/hobby-server/internal/prep"
 )
 
 // secureCookies is set once at startup based on cfg.Server.Env.
@@ -101,6 +102,20 @@ func main() {
 			sub.Post("/login", handleLogin(s.pool, s.store, s.project, s.cookieName))
 			sub.Post("/logout", handleLogout(s.store, s.project, s.cookieName))
 			sub.Get("/me", handleMe(s.store, s.cookieName))
+
+			// Project-specific routes. Today only "rv" has a prep-checklist
+			// feature; if a second project grows its own endpoints we'll
+			// refactor this into a plugin pattern.
+			if s.project.Name == "rv" {
+				prepStore := prep.NewStore(s.pool)
+				// Public read.
+				sub.Get("/prep", prep.HandleList(prepStore))
+				// Authed writes — wrap each handler with the session middleware.
+				authMW := auth.Middleware(s.store, s.cookieName)
+				sub.With(authMW).Post("/prep", prep.HandleCreate(prepStore))
+				sub.With(authMW).Patch("/prep/{id}", prep.HandlePatch(prepStore))
+				sub.With(authMW).Delete("/prep/{id}", prep.HandleDelete(prepStore))
+			}
 		})
 	}
 

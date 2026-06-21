@@ -11,5 +11,6 @@
         any landed changeset; create a new file instead.
     -->
     <include file="changelog/001-initial-schema.xml"/>
+    <include file="changelog/002-prep-checklist.xml"/>
 
 </databaseChangeLog>

@@ -12,10 +12,11 @@ RUN go mod download
 
 COPY . .
 
-# Two binaries: the long-running multi-project server and the one-shot
-# add-user CLI.
+# Three binaries: the long-running multi-project server, the add-user
+# CLI, and the rv-specific one-shot prep seed loader.
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o hobby-server cmd/server/main.go && \
-    CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o add-user     cmd/add-user/main.go
+    CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o add-user     cmd/add-user/main.go && \
+    CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o seed-prep    cmd/seed-prep/main.go
 
 # Stage 2: Runtime.
 FROM alpine:3.19
@@ -30,6 +31,7 @@ RUN mkdir -p /config && chown -R hobby:hobby /config
 
 COPY --from=builder /app/hobby-server /usr/local/bin/hobby-server
 COPY --from=builder /app/add-user     /usr/local/bin/add-user
+COPY --from=builder /app/seed-prep    /usr/local/bin/seed-prep
 
 # Reference: liquibase changelogs (one subdir per project) mounted by
 # install.sh for migrations.
