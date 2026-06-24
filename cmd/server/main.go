@@ -115,6 +115,9 @@ func main() {
 				sub.With(authMW).Post("/prep", prep.HandleCreate(prepStore))
 				sub.With(authMW).Patch("/prep/{id}", prep.HandlePatch(prepStore))
 				sub.With(authMW).Delete("/prep/{id}", prep.HandleDelete(prepStore))
+				sub.With(authMW).Post("/prep/sections", prep.HandleCreateSection(prepStore))
+				sub.With(authMW).Patch("/prep/sections/{id}", prep.HandlePatchSection(prepStore))
+				sub.With(authMW).Delete("/prep/sections/{id}", prep.HandleDeleteSection(prepStore))
 			}
 		})
 	}

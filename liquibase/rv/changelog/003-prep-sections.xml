@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        Make prep sections dynamic. Previously sections were hardcoded
+        as ["before", "during"] in prep.js, with prep_item.section just
+        being an opaque string. Now sections live in their own table
+        with a title and sort order, editable via the UI.
+
+        prep_item.section continues to reference the section by its
+        slug/id (string FK semantics; no enforced FK so we can soft-
+        rename sections without cascading).
+    -->
+
+    <changeSet id="003-prep-sections" author="rv-server">
+
+        <createTable tableName="prep_section">
+            <column name="id" type="TEXT">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="title" type="TEXT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="sort_order" type="DOUBLE PRECISION">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <!-- Seed the two existing hardcoded sections so the live data
+             stays intact. New sections get added via the UI after this. -->
+        <insert tableName="prep_section">
+            <column name="id" value="before"/>
+            <column name="title" value="Before the trip"/>
+            <column name="sort_order" valueNumeric="1000"/>
+        </insert>
+        <insert tableName="prep_section">
+            <column name="id" value="during"/>
+            <column name="title" value="During the trip"/>
+            <column name="sort_order" valueNumeric="2000"/>
+        </insert>
+
+    </changeSet>
+
+</databaseChangeLog>
