@@ -40,6 +40,7 @@ import (
 	"github.com/slackwing/hobby-server/internal/config"
 	"github.com/slackwing/hobby-server/internal/database"
 	"github.com/slackwing/hobby-server/internal/prep"
+	"github.com/slackwing/hobby-server/internal/rvedit"
 )
 
 // secureCookies is set once at startup based on cfg.Server.Env.
@@ -118,6 +119,18 @@ func main() {
 				sub.With(authMW).Post("/prep/sections", prep.HandleCreateSection(prepStore))
 				sub.With(authMW).Patch("/prep/sections/{id}", prep.HandlePatchSection(prepStore))
 				sub.With(authMW).Delete("/prep/sections/{id}", prep.HandleDeleteSection(prepStore))
+
+				// rvedit: editable overlay over the static catalog +
+				// itinerary. See internal/rvedit/rvedit.go.
+				rvStore := rvedit.NewStore(s.pool)
+				sub.Get("/locations", rvedit.HandleListLocations(rvStore))
+				sub.With(authMW).Post("/locations", rvedit.HandleCreateLocation(rvStore))
+				sub.With(authMW).Patch("/locations/{id}", rvedit.HandlePatchLocation(rvStore))
+				sub.With(authMW).Delete("/locations/{id}", rvedit.HandleDeleteLocation(rvStore))
+				sub.Get("/itinerary", rvedit.HandleListItinerary(rvStore))
+				sub.With(authMW).Post("/itinerary", rvedit.HandleUpsertItinerary(rvStore))
+				sub.With(authMW).Patch("/itinerary/{id}", rvedit.HandlePatchItinerary(rvStore))
+				sub.With(authMW).Delete("/itinerary/{id}", rvedit.HandleDeleteItinerary(rvStore))
 			}
 		})
 	}

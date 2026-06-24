@@ -1,0 +1,489 @@
+// Package rvedit implements the rv project's editable overlay over the
+// static catalog (assets/map-sources.json -> map.json) and itinerary
+// (assets/itinerary.json).
+//
+// Two tables:
+//
+//   location_user     — unified override + new-location storage
+//   itinerary_override — per-day itinerary overrides + inserted days
+//
+// See liquibase/rv/changelog/004-itinerary-and-locations.xml for the
+// schema and rationale. The frontend layers these over the static JSON
+// it loads from the static site; the server is dumb storage + CRUD.
+//
+// Endpoints (mounted under the rv project's URL prefix, e.g. /api/rv):
+//
+//   GET    /locations               → public; returns all location_user rows
+//   POST   /locations               → auth; create (override or new)
+//   PATCH  /locations/{id}          → auth; partial update
+//   DELETE /locations/{id}          → auth; soft delete (sets deleted_at)
+//
+//   GET    /itinerary               → public; returns all itinerary_override rows
+//   POST   /itinerary               → auth; create (inserted day)
+//   PATCH  /itinerary/{id}          → auth; partial update
+//   DELETE /itinerary/{id}          → auth; hard delete (intentional — confirmed in design)
+package rvedit
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"log"
+	"net/http"
+	"strconv"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+// ============================================================
+// location_user
+// ============================================================
+
+type Location struct {
+	ID            string     `json:"id"`
+	Kind          string     `json:"kind"` // "override" | "new"
+	Name          *string    `json:"name"`
+	Lat           *float64   `json:"lat"`
+	Lon           *float64   `json:"lon"`
+	RouteFraction *float64   `json:"route_fraction"`
+	Emoji         *string    `json:"emoji"`
+	Markdown      *string    `json:"markdown"`
+	SleepType     *string    `json:"sleep_type"`
+	Activated     bool       `json:"activated"`
+	DeletedAt     *time.Time `json:"deleted_at"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+}
+
+type Store struct {
+	pool *pgxpool.Pool
+}
+
+func NewStore(pool *pgxpool.Pool) *Store {
+	return &Store{pool: pool}
+}
+
+const locColumns = "id, kind, name, lat, lon, route_fraction, emoji, markdown, sleep_type, activated, deleted_at, created_at, updated_at"
+
+func (s *Store) ListLocations(ctx context.Context) ([]Location, error) {
+	rows, err := s.pool.Query(ctx, `SELECT `+locColumns+` FROM location_user ORDER BY created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]Location, 0)
+	for rows.Next() {
+		var l Location
+		if err := rows.Scan(&l.ID, &l.Kind, &l.Name, &l.Lat, &l.Lon, &l.RouteFraction, &l.Emoji, &l.Markdown, &l.SleepType, &l.Activated, &l.DeletedAt, &l.CreatedAt, &l.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
+type createLocReq struct {
+	ID            string   `json:"id"`
+	Kind          string   `json:"kind"` // "override" | "new"
+	Name          *string  `json:"name"`
+	Lat           *float64 `json:"lat"`
+	Lon           *float64 `json:"lon"`
+	RouteFraction *float64 `json:"route_fraction"`
+	Emoji         *string  `json:"emoji"`
+	Markdown      *string  `json:"markdown"`
+	SleepType     *string  `json:"sleep_type"`
+	Activated     *bool    `json:"activated"`
+}
+
+func (s *Store) CreateLocation(ctx context.Context, req createLocReq) (Location, error) {
+	activated := true
+	if req.Activated != nil {
+		activated = *req.Activated
+	}
+	var l Location
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO location_user (id, kind, name, lat, lon, route_fraction, emoji, markdown, sleep_type, activated)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+		RETURNING `+locColumns,
+		req.ID, req.Kind, req.Name, req.Lat, req.Lon, req.RouteFraction, req.Emoji, req.Markdown, req.SleepType, activated,
+	).Scan(&l.ID, &l.Kind, &l.Name, &l.Lat, &l.Lon, &l.RouteFraction, &l.Emoji, &l.Markdown, &l.SleepType, &l.Activated, &l.DeletedAt, &l.CreatedAt, &l.UpdatedAt)
+	return l, err
+}
+
+type patchLocReq struct {
+	Name          *string  `json:"name"`
+	Lat           *float64 `json:"lat"`
+	Lon           *float64 `json:"lon"`
+	RouteFraction *float64 `json:"route_fraction"`
+	Emoji         *string  `json:"emoji"`
+	Markdown      *string  `json:"markdown"`
+	SleepType     *string  `json:"sleep_type"`
+	Activated     *bool    `json:"activated"`
+	// Pass true to restore a soft-deleted row.
+	Restore bool `json:"restore"`
+}
+
+func (s *Store) PatchLocation(ctx context.Context, id string, req patchLocReq) (Location, error) {
+	sets := []string{"updated_at = NOW()"}
+	args := []any{id}
+	addArg := func(col string, v any) {
+		args = append(args, v)
+		sets = append(sets, col+" = $"+strconv.Itoa(len(args)))
+	}
+	if req.Name != nil {
+		addArg("name", *req.Name)
+	}
+	if req.Lat != nil {
+		addArg("lat", *req.Lat)
+	}
+	if req.Lon != nil {
+		addArg("lon", *req.Lon)
+	}
+	if req.RouteFraction != nil {
+		addArg("route_fraction", *req.RouteFraction)
+	}
+	if req.Emoji != nil {
+		addArg("emoji", *req.Emoji)
+	}
+	if req.Markdown != nil {
+		addArg("markdown", *req.Markdown)
+	}
+	if req.SleepType != nil {
+		addArg("sleep_type", *req.SleepType)
+	}
+	if req.Activated != nil {
+		addArg("activated", *req.Activated)
+	}
+	if req.Restore {
+		sets = append(sets, "deleted_at = NULL")
+	}
+
+	q := "UPDATE location_user SET " + joinSets(sets) + " WHERE id = $1 RETURNING " + locColumns
+	var l Location
+	err := s.pool.QueryRow(ctx, q, args...).Scan(&l.ID, &l.Kind, &l.Name, &l.Lat, &l.Lon, &l.RouteFraction, &l.Emoji, &l.Markdown, &l.SleepType, &l.Activated, &l.DeletedAt, &l.CreatedAt, &l.UpdatedAt)
+	return l, err
+}
+
+// SoftDeleteLocation marks the row as deleted (sets deleted_at = NOW()).
+// Catalog overrides still exist in the DB but the frontend will treat
+// them as not-overridden (fall through to catalog). New user locations
+// render as a small red ❌ that can be restored via PATCH.
+func (s *Store) SoftDeleteLocation(ctx context.Context, id string) error {
+	tag, err := s.pool.Exec(ctx, `UPDATE location_user SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
+// ============================================================
+// itinerary_override
+// ============================================================
+
+type ItineraryEntry struct {
+	DayID      string    `json:"day_id"`
+	SleepLocID *string   `json:"sleep_loc_id"`
+	Markdown   *string   `json:"markdown"`
+	Ordinal    float64   `json:"ordinal"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+const itinColumns = "day_id, sleep_loc_id, markdown, ordinal, created_at, updated_at"
+
+func (s *Store) ListItinerary(ctx context.Context) ([]ItineraryEntry, error) {
+	rows, err := s.pool.Query(ctx, `SELECT `+itinColumns+` FROM itinerary_override ORDER BY ordinal, day_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]ItineraryEntry, 0)
+	for rows.Next() {
+		var it ItineraryEntry
+		if err := rows.Scan(&it.DayID, &it.SleepLocID, &it.Markdown, &it.Ordinal, &it.CreatedAt, &it.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, it)
+	}
+	return out, rows.Err()
+}
+
+type createItinReq struct {
+	DayID      string  `json:"day_id"`
+	SleepLocID *string `json:"sleep_loc_id"`
+	Markdown   *string `json:"markdown"`
+	Ordinal    float64 `json:"ordinal"`
+}
+
+// UpsertItinerary upserts by day_id. The first edit of a static day
+// (e.g., changing Day 5's sleep) creates an override row keyed by
+// "static_5"; subsequent edits update that row. New inserted days are
+// created with a UUID day_id.
+func (s *Store) UpsertItinerary(ctx context.Context, req createItinReq) (ItineraryEntry, error) {
+	var it ItineraryEntry
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO itinerary_override (day_id, sleep_loc_id, markdown, ordinal)
+		VALUES ($1,$2,$3,$4)
+		ON CONFLICT (day_id) DO UPDATE SET
+		  sleep_loc_id = EXCLUDED.sleep_loc_id,
+		  markdown     = EXCLUDED.markdown,
+		  ordinal      = EXCLUDED.ordinal,
+		  updated_at   = NOW()
+		RETURNING `+itinColumns,
+		req.DayID, req.SleepLocID, req.Markdown, req.Ordinal,
+	).Scan(&it.DayID, &it.SleepLocID, &it.Markdown, &it.Ordinal, &it.CreatedAt, &it.UpdatedAt)
+	return it, err
+}
+
+type patchItinReq struct {
+	SleepLocID    *string  `json:"sleep_loc_id"`
+	Markdown      *string  `json:"markdown"`
+	Ordinal       *float64 `json:"ordinal"`
+	ClearOverride bool     `json:"clear_override"` // set to true with a field also nil to explicitly NULL it
+}
+
+func (s *Store) PatchItinerary(ctx context.Context, dayID string, req patchItinReq) (ItineraryEntry, error) {
+	sets := []string{"updated_at = NOW()"}
+	args := []any{dayID}
+	addArg := func(col string, v any) {
+		args = append(args, v)
+		sets = append(sets, col+" = $"+strconv.Itoa(len(args)))
+	}
+	if req.SleepLocID != nil {
+		addArg("sleep_loc_id", *req.SleepLocID)
+	}
+	if req.Markdown != nil {
+		addArg("markdown", *req.Markdown)
+	}
+	if req.Ordinal != nil {
+		addArg("ordinal", *req.Ordinal)
+	}
+	q := "UPDATE itinerary_override SET " + joinSets(sets) + " WHERE day_id = $1 RETURNING " + itinColumns
+	var it ItineraryEntry
+	err := s.pool.QueryRow(ctx, q, args...).Scan(&it.DayID, &it.SleepLocID, &it.Markdown, &it.Ordinal, &it.CreatedAt, &it.UpdatedAt)
+	return it, err
+}
+
+// DeleteItinerary hard-deletes the row. By design — confirmed at design
+// time that itinerary days are gone-is-gone. Markdown is precious only
+// while the row exists; UI must double-confirm before calling this.
+func (s *Store) DeleteItinerary(ctx context.Context, dayID string) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM itinerary_override WHERE day_id = $1`, dayID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
+// ============================================================
+// helpers
+// ============================================================
+
+func joinSets(sets []string) string {
+	out := ""
+	for i, s := range sets {
+		if i > 0 {
+			out += ", "
+		}
+		out += s
+	}
+	return out
+}
+
+// ============================================================
+// HTTP handlers
+// ============================================================
+
+func writeJSON(w http.ResponseWriter, status int, body any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(body)
+}
+
+// ---------- locations ----------
+
+func HandleListLocations(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		locs, err := store.ListLocations(r.Context())
+		if err != nil {
+			log.Printf("rvedit list locations: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"locations": locs})
+	}
+}
+
+func HandleCreateLocation(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req createLocReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		if req.ID == "" || req.Kind == "" {
+			http.Error(w, "id and kind required", http.StatusBadRequest)
+			return
+		}
+		if req.Kind != "override" && req.Kind != "new" {
+			http.Error(w, "kind must be 'override' or 'new'", http.StatusBadRequest)
+			return
+		}
+		// For 'new' rows require name + coords (lat/lon OR route_fraction).
+		if req.Kind == "new" {
+			if req.Name == nil || *req.Name == "" {
+				http.Error(w, "name required for new location", http.StatusBadRequest)
+				return
+			}
+			if (req.Lat == nil || req.Lon == nil) && req.RouteFraction == nil {
+				http.Error(w, "lat/lon or route_fraction required for new location", http.StatusBadRequest)
+				return
+			}
+		}
+		loc, err := store.CreateLocation(r.Context(), req)
+		if err != nil {
+			log.Printf("rvedit create location: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusCreated, loc)
+	}
+}
+
+func HandlePatchLocation(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		if id == "" {
+			http.Error(w, "bad id", http.StatusBadRequest)
+			return
+		}
+		var req patchLocReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		loc, err := store.PatchLocation(r.Context(), id, req)
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			log.Printf("rvedit patch location: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, loc)
+	}
+}
+
+func HandleDeleteLocation(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		if id == "" {
+			http.Error(w, "bad id", http.StatusBadRequest)
+			return
+		}
+		err := store.SoftDeleteLocation(r.Context(), id)
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			log.Printf("rvedit soft-delete location: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// ---------- itinerary ----------
+
+func HandleListItinerary(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		days, err := store.ListItinerary(r.Context())
+		if err != nil {
+			log.Printf("rvedit list itinerary: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"days": days})
+	}
+}
+
+func HandleUpsertItinerary(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req createItinReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		if req.DayID == "" {
+			http.Error(w, "day_id required", http.StatusBadRequest)
+			return
+		}
+		it, err := store.UpsertItinerary(r.Context(), req)
+		if err != nil {
+			log.Printf("rvedit upsert itinerary: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusCreated, it)
+	}
+}
+
+func HandlePatchItinerary(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		if id == "" {
+			http.Error(w, "bad id", http.StatusBadRequest)
+			return
+		}
+		var req patchItinReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		it, err := store.PatchItinerary(r.Context(), id, req)
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			log.Printf("rvedit patch itinerary: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, it)
+	}
+}
+
+func HandleDeleteItinerary(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		if id == "" {
+			http.Error(w, "bad id", http.StatusBadRequest)
+			return
+		}
+		err := store.DeleteItinerary(r.Context(), id)
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			log.Printf("rvedit delete itinerary: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}

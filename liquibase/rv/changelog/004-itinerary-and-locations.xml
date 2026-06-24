@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        Editable itinerary + location override layer.
+
+        The static catalog (rv/assets/map-sources.json -> compute_everything
+        -> map.json) is the source of truth for the route, segments, and
+        ALL locations. These DB tables OVERRIDE / EXTEND the catalog.
+
+        Two tables:
+
+        location_user — unified override+new locations
+          A row keyed by `id` matching a catalog location id is an
+          override (catalog gets patched at render time). A row with a
+          generated UUID id is a brand-new "user location" entered via
+          the map-click UI on the route line. The shape is identical so
+          there's one type to think about.
+
+        itinerary_override — per-day itinerary overrides
+          The static itinerary (rv/assets/itinerary.json) provides
+          baseline days 1..N. Each gets a synthetic stable id `static_N`.
+          A row with day_id `static_N` overrides the static day. A row
+          with a generated UUID id is a brand-new inserted day. Days are
+          rendered sorted by `ordinal` (float) so insertions take the
+          midpoint between neighbors without renumbering.
+
+        No hard delete on locations (soft-delete via deleted_at + the UI
+        shows a red ❌ over a soft-deleted spot, can be restored). Hard
+        delete on itinerary days — gone is gone. (Confirmed by user.)
+    -->
+
+    <changeSet id="004-location-user" author="rv-server">
+
+        <createTable tableName="location_user">
+            <!-- For overrides: matches catalog location id.
+                 For new user locations: generated UUID. -->
+            <column name="id" type="TEXT">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <!-- Discriminator: 'override' patches a catalog location;
+                 'new' is a brand-new user-added location. -->
+            <column name="kind" type="TEXT">
+                <constraints nullable="false"/>
+            </column>
+            <!-- All editable fields are nullable. Override semantics:
+                 non-null = patch this field; null = fall through to
+                 catalog. For 'new' rows, name/lat/lon/route_fraction
+                 must all be non-null (enforced server-side, not DB). -->
+            <column name="name" type="TEXT"/>
+            <column name="lat" type="DOUBLE PRECISION"/>
+            <column name="lon" type="DOUBLE PRECISION"/>
+            <!-- For 'new' locations, this is the position along the main
+                 route polyline (0..1) computed when the user clicks.
+                 Drives interpolated drive-time math. Not meaningful for
+                 'override' rows. -->
+            <column name="route_fraction" type="DOUBLE PRECISION"/>
+            <!-- One emoji char (or empty for a default dot). For sleep
+                 spots, the existing 🚐/🏨 still wins. -->
+            <column name="emoji" type="TEXT"/>
+            <!-- Freeform markdown notes shown in a hover/click panel. -->
+            <column name="markdown" type="TEXT"/>
+            <!-- See type semantics in map.json. Override sleep_type
+                 ('hotel', 'free_dispersed', etc.). -->
+            <column name="sleep_type" type="TEXT"/>
+            <!-- Activated bool: only meaningful for sleep_type emojis.
+                 Deactivated sleep spots render at ~50% opacity. Default
+                 true; the FRONTEND will treat any sleep spot NOT used in
+                 the live itinerary as deactivated unless overridden true. -->
+            <column name="activated" type="BOOLEAN" defaultValueBoolean="true">
+                <constraints nullable="false"/>
+            </column>
+            <column name="deleted_at" type="TIMESTAMPTZ"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <createIndex tableName="location_user" indexName="idx_location_user_kind">
+            <column name="kind"/>
+        </createIndex>
+
+    </changeSet>
+
+    <changeSet id="004-itinerary-override" author="rv-server">
+
+        <createTable tableName="itinerary_override">
+            <!-- day_id: either `static_N` to override the Nth static day,
+                 or a generated UUID for a brand-new inserted day. -->
+            <column name="day_id" type="TEXT">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <!-- Null = use the static day's sleep id (only meaningful
+                 when day_id = static_N). Non-null = override. -->
+            <column name="sleep_loc_id" type="TEXT"/>
+            <!-- Null = use static notes joined as bullets. Non-null = the
+                 freeform markdown that replaces the static notes. -->
+            <column name="markdown" type="TEXT"/>
+            <!-- Sortable position. Inserted days take the midpoint
+                 between adjacent neighbors. For overrides of static day
+                 N, ordinal is initialized to N*1000.0 so they slot into
+                 the right spot among any inserted days. -->
+            <column name="ordinal" type="DOUBLE PRECISION">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <createIndex tableName="itinerary_override" indexName="idx_itinerary_override_ordinal">
+            <column name="ordinal"/>
+        </createIndex>
+
+    </changeSet>
+
+</databaseChangeLog>
