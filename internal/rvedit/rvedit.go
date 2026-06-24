@@ -53,6 +53,10 @@ type Location struct {
 	Markdown      *string    `json:"markdown"`
 	SleepType     *string    `json:"sleep_type"`
 	Activated     bool       `json:"activated"`
+	// Shorter / friendlier name used ONLY by itinerary day-card headers
+	// and the left-side timeline. Falls through to Name when null/empty.
+	// The route map continues to use Name.
+	DayCardLabel  *string    `json:"day_card_label"`
 	DeletedAt     *time.Time `json:"deleted_at"`
 	CreatedAt     time.Time  `json:"created_at"`
 	UpdatedAt     time.Time  `json:"updated_at"`
@@ -66,7 +70,7 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
-const locColumns = "id, kind, name, lat, lon, route_fraction, emoji, markdown, sleep_type, activated, deleted_at, created_at, updated_at"
+const locColumns = "id, kind, name, lat, lon, route_fraction, emoji, markdown, sleep_type, activated, day_card_label, deleted_at, created_at, updated_at"
 
 func (s *Store) ListLocations(ctx context.Context) ([]Location, error) {
 	rows, err := s.pool.Query(ctx, `SELECT `+locColumns+` FROM location_user ORDER BY created_at`)
@@ -77,7 +81,7 @@ func (s *Store) ListLocations(ctx context.Context) ([]Location, error) {
 	out := make([]Location, 0)
 	for rows.Next() {
 		var l Location
-		if err := rows.Scan(&l.ID, &l.Kind, &l.Name, &l.Lat, &l.Lon, &l.RouteFraction, &l.Emoji, &l.Markdown, &l.SleepType, &l.Activated, &l.DeletedAt, &l.CreatedAt, &l.UpdatedAt); err != nil {
+		if err := rows.Scan(&l.ID, &l.Kind, &l.Name, &l.Lat, &l.Lon, &l.RouteFraction, &l.Emoji, &l.Markdown, &l.SleepType, &l.Activated, &l.DayCardLabel, &l.DeletedAt, &l.CreatedAt, &l.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, l)
@@ -96,6 +100,7 @@ type createLocReq struct {
 	Markdown      *string  `json:"markdown"`
 	SleepType     *string  `json:"sleep_type"`
 	Activated     *bool    `json:"activated"`
+	DayCardLabel  *string  `json:"day_card_label"`
 }
 
 func (s *Store) CreateLocation(ctx context.Context, req createLocReq) (Location, error) {
@@ -105,11 +110,11 @@ func (s *Store) CreateLocation(ctx context.Context, req createLocReq) (Location,
 	}
 	var l Location
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO location_user (id, kind, name, lat, lon, route_fraction, emoji, markdown, sleep_type, activated)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+		INSERT INTO location_user (id, kind, name, lat, lon, route_fraction, emoji, markdown, sleep_type, activated, day_card_label)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 		RETURNING `+locColumns,
-		req.ID, req.Kind, req.Name, req.Lat, req.Lon, req.RouteFraction, req.Emoji, req.Markdown, req.SleepType, activated,
-	).Scan(&l.ID, &l.Kind, &l.Name, &l.Lat, &l.Lon, &l.RouteFraction, &l.Emoji, &l.Markdown, &l.SleepType, &l.Activated, &l.DeletedAt, &l.CreatedAt, &l.UpdatedAt)
+		req.ID, req.Kind, req.Name, req.Lat, req.Lon, req.RouteFraction, req.Emoji, req.Markdown, req.SleepType, activated, req.DayCardLabel,
+	).Scan(&l.ID, &l.Kind, &l.Name, &l.Lat, &l.Lon, &l.RouteFraction, &l.Emoji, &l.Markdown, &l.SleepType, &l.Activated, &l.DayCardLabel, &l.DeletedAt, &l.CreatedAt, &l.UpdatedAt)
 	return l, err
 }
 
@@ -122,6 +127,10 @@ type patchLocReq struct {
 	Markdown      *string  `json:"markdown"`
 	SleepType     *string  `json:"sleep_type"`
 	Activated     *bool    `json:"activated"`
+	DayCardLabel  *string  `json:"day_card_label"`
+	// Pass true to clear day_card_label (set NULL). JSON null in the
+	// field is harder to detect without a custom unmarshaler.
+	ClearDayCardLabel bool `json:"clear_day_card_label"`
 	// Pass true to restore a soft-deleted row.
 	Restore bool `json:"restore"`
 }
@@ -157,13 +166,18 @@ func (s *Store) PatchLocation(ctx context.Context, id string, req patchLocReq) (
 	if req.Activated != nil {
 		addArg("activated", *req.Activated)
 	}
+	if req.ClearDayCardLabel {
+		sets = append(sets, "day_card_label = NULL")
+	} else if req.DayCardLabel != nil {
+		addArg("day_card_label", *req.DayCardLabel)
+	}
 	if req.Restore {
 		sets = append(sets, "deleted_at = NULL")
 	}
 
 	q := "UPDATE location_user SET " + joinSets(sets) + " WHERE id = $1 RETURNING " + locColumns
 	var l Location
-	err := s.pool.QueryRow(ctx, q, args...).Scan(&l.ID, &l.Kind, &l.Name, &l.Lat, &l.Lon, &l.RouteFraction, &l.Emoji, &l.Markdown, &l.SleepType, &l.Activated, &l.DeletedAt, &l.CreatedAt, &l.UpdatedAt)
+	err := s.pool.QueryRow(ctx, q, args...).Scan(&l.ID, &l.Kind, &l.Name, &l.Lat, &l.Lon, &l.RouteFraction, &l.Emoji, &l.Markdown, &l.SleepType, &l.Activated, &l.DayCardLabel, &l.DeletedAt, &l.CreatedAt, &l.UpdatedAt)
 	return l, err
 }
 

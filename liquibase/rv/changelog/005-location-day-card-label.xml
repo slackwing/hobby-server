@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        Adds location_user.day_card_label — a shorter / friendlier
+        display name used ONLY in itinerary day-card headers and the
+        left-side timeline rail. The route map continues to use
+        location.name (the canonical name).
+
+        The frontend reads this field as an override over the catalog's
+        name when rendering day-card start/end and the timeline label.
+        Editable only inside the day-card edit flow (no map-side edit
+        surface), since the only reason to set it is to shorten a long
+        catalog name for the cards.
+    -->
+
+    <changeSet id="005-location-day-card-label" author="rv-server">
+        <addColumn tableName="location_user">
+            <column name="day_card_label" type="TEXT"/>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

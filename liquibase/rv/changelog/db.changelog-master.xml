@@ -14,5 +14,6 @@
     <include file="changelog/002-prep-checklist.xml"/>
     <include file="changelog/003-prep-sections.xml"/>
     <include file="changelog/004-itinerary-and-locations.xml"/>
+    <include file="changelog/005-location-day-card-label.xml"/>
 
 </databaseChangeLog>
