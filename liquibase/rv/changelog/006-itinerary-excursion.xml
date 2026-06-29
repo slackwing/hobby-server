@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        Adds itinerary_override.excursion — a single optional location id
+        the day visits round-trip from its sleep. Only meaningful when the
+        day's sleep matches the previous day's sleep (a 2-night stay with
+        a day-trip in the middle). Drive time renders as the one-way
+        sleep→excursion drive, displayed as "Xh Ym x2".
+    -->
+
+    <changeSet id="006-itinerary-excursion" author="rv-server">
+        <addColumn tableName="itinerary_override">
+            <column name="excursion" type="TEXT"/>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

@@ -220,12 +220,13 @@ type ItineraryEntry struct {
 	DayID      string    `json:"day_id"`
 	SleepLocID *string   `json:"sleep_loc_id"`
 	Markdown   *string   `json:"markdown"`
+	Excursion  *string   `json:"excursion"`
 	Ordinal    float64   `json:"ordinal"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
 }
 
-const itinColumns = "day_id, sleep_loc_id, markdown, ordinal, created_at, updated_at"
+const itinColumns = "day_id, sleep_loc_id, markdown, excursion, ordinal, created_at, updated_at"
 
 func (s *Store) ListItinerary(ctx context.Context) ([]ItineraryEntry, error) {
 	rows, err := s.pool.Query(ctx, `SELECT `+itinColumns+` FROM itinerary_override ORDER BY ordinal, day_id`)
@@ -236,7 +237,7 @@ func (s *Store) ListItinerary(ctx context.Context) ([]ItineraryEntry, error) {
 	out := make([]ItineraryEntry, 0)
 	for rows.Next() {
 		var it ItineraryEntry
-		if err := rows.Scan(&it.DayID, &it.SleepLocID, &it.Markdown, &it.Ordinal, &it.CreatedAt, &it.UpdatedAt); err != nil {
+		if err := rows.Scan(&it.DayID, &it.SleepLocID, &it.Markdown, &it.Excursion, &it.Ordinal, &it.CreatedAt, &it.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, it)
@@ -248,6 +249,7 @@ type createItinReq struct {
 	DayID      string  `json:"day_id"`
 	SleepLocID *string `json:"sleep_loc_id"`
 	Markdown   *string `json:"markdown"`
+	Excursion  *string `json:"excursion"`
 	Ordinal    float64 `json:"ordinal"`
 }
 
@@ -258,22 +260,24 @@ type createItinReq struct {
 func (s *Store) UpsertItinerary(ctx context.Context, req createItinReq) (ItineraryEntry, error) {
 	var it ItineraryEntry
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO itinerary_override (day_id, sleep_loc_id, markdown, ordinal)
-		VALUES ($1,$2,$3,$4)
+		INSERT INTO itinerary_override (day_id, sleep_loc_id, markdown, excursion, ordinal)
+		VALUES ($1,$2,$3,$4,$5)
 		ON CONFLICT (day_id) DO UPDATE SET
 		  sleep_loc_id = EXCLUDED.sleep_loc_id,
 		  markdown     = EXCLUDED.markdown,
+		  excursion    = EXCLUDED.excursion,
 		  ordinal      = EXCLUDED.ordinal,
 		  updated_at   = NOW()
 		RETURNING `+itinColumns,
-		req.DayID, req.SleepLocID, req.Markdown, req.Ordinal,
-	).Scan(&it.DayID, &it.SleepLocID, &it.Markdown, &it.Ordinal, &it.CreatedAt, &it.UpdatedAt)
+		req.DayID, req.SleepLocID, req.Markdown, req.Excursion, req.Ordinal,
+	).Scan(&it.DayID, &it.SleepLocID, &it.Markdown, &it.Excursion, &it.Ordinal, &it.CreatedAt, &it.UpdatedAt)
 	return it, err
 }
 
 type patchItinReq struct {
 	SleepLocID    *string  `json:"sleep_loc_id"`
 	Markdown      *string  `json:"markdown"`
+	Excursion     *string  `json:"excursion"`
 	Ordinal       *float64 `json:"ordinal"`
 	ClearOverride bool     `json:"clear_override"` // set to true with a field also nil to explicitly NULL it
 }
@@ -291,12 +295,20 @@ func (s *Store) PatchItinerary(ctx context.Context, dayID string, req patchItinR
 	if req.Markdown != nil {
 		addArg("markdown", *req.Markdown)
 	}
+	if req.Excursion != nil {
+		// Convention: passing empty-string excursion clears the field.
+		if *req.Excursion == "" {
+			addArg("excursion", nil)
+		} else {
+			addArg("excursion", *req.Excursion)
+		}
+	}
 	if req.Ordinal != nil {
 		addArg("ordinal", *req.Ordinal)
 	}
 	q := "UPDATE itinerary_override SET " + joinSets(sets) + " WHERE day_id = $1 RETURNING " + itinColumns
 	var it ItineraryEntry
-	err := s.pool.QueryRow(ctx, q, args...).Scan(&it.DayID, &it.SleepLocID, &it.Markdown, &it.Ordinal, &it.CreatedAt, &it.UpdatedAt)
+	err := s.pool.QueryRow(ctx, q, args...).Scan(&it.DayID, &it.SleepLocID, &it.Markdown, &it.Excursion, &it.Ordinal, &it.CreatedAt, &it.UpdatedAt)
 	return it, err
 }
 
