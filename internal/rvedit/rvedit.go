@@ -184,9 +184,25 @@ func (s *Store) PatchLocation(ctx context.Context, id string, req patchLocReq) (
 // SoftDeleteLocation marks the row as deleted (sets deleted_at = NOW()).
 // Catalog overrides still exist in the DB but the frontend will treat
 // them as not-overridden (fall through to catalog). New user locations
-// render as a small red ❌ that can be restored via PATCH.
+// are hidden from the map until restored via PATCH with restore:true.
 func (s *Store) SoftDeleteLocation(ctx context.Context, id string) error {
 	tag, err := s.pool.Exec(ctx, `UPDATE location_user SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
+// HardDeleteLocation removes the row entirely. Used as "reset" for
+// catalog overrides — once removed, the catalog values are canonical
+// again with no override layer. For "new" user locations this just
+// deletes them permanently (use SoftDelete + restore if you want
+// recoverable deletion).
+func (s *Store) HardDeleteLocation(ctx context.Context, id string) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM location_user WHERE id = $1`, id)
 	if err != nil {
 		return err
 	}
@@ -406,13 +422,22 @@ func HandleDeleteLocation(store *Store) http.HandlerFunc {
 			http.Error(w, "bad id", http.StatusBadRequest)
 			return
 		}
-		err := store.SoftDeleteLocation(r.Context(), id)
+		// ?hard=true → permanently remove the row (used as "reset" for
+		// a catalog override; the location returns to its catalog
+		// values). Default is soft-delete.
+		hard := r.URL.Query().Get("hard") == "true"
+		var err error
+		if hard {
+			err = store.HardDeleteLocation(r.Context(), id)
+		} else {
+			err = store.SoftDeleteLocation(r.Context(), id)
+		}
 		if errors.Is(err, pgx.ErrNoRows) {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
 		if err != nil {
-			log.Printf("rvedit soft-delete location: %v", err)
+			log.Printf("rvedit delete location (hard=%v): %v", hard, err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
