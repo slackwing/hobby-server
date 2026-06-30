@@ -545,3 +545,82 @@ func HandleDeleteItinerary(store *Store) http.HandlerFunc {
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
+
+// ============================================================
+// note (single-row scratchpad)
+// ============================================================
+//
+// Routes:
+//   GET /note          → public; returns the "main" note row
+//   PUT /note          → auth;   replaces markdown for "main"
+//
+// Schema seeds a row with id="main" so the PUT path is always an
+// UPDATE, never an upsert. We don't expose a list/create surface —
+// the project only needs one note.
+
+type Note struct {
+	ID        string    `json:"id"`
+	Markdown  string    `json:"markdown"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func (s *Store) GetNote(ctx context.Context, id string) (Note, error) {
+	var n Note
+	err := s.pool.QueryRow(ctx,
+		`SELECT id, markdown, created_at, updated_at FROM note WHERE id = $1`, id,
+	).Scan(&n.ID, &n.Markdown, &n.CreatedAt, &n.UpdatedAt)
+	return n, err
+}
+
+type putNoteReq struct {
+	Markdown string `json:"markdown"`
+}
+
+func (s *Store) PutNote(ctx context.Context, id, markdown string) (Note, error) {
+	var n Note
+	err := s.pool.QueryRow(ctx, `
+		UPDATE note SET markdown = $2, updated_at = NOW()
+		WHERE id = $1
+		RETURNING id, markdown, created_at, updated_at`,
+		id, markdown,
+	).Scan(&n.ID, &n.Markdown, &n.CreatedAt, &n.UpdatedAt)
+	return n, err
+}
+
+func HandleGetNote(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		n, err := store.GetNote(r.Context(), "main")
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			log.Printf("rvedit get note: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, n)
+	}
+}
+
+func HandlePutNote(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req putNoteReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		n, err := store.PutNote(r.Context(), "main", req.Markdown)
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			log.Printf("rvedit put note: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, n)
+	}
+}

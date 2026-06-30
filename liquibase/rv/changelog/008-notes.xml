@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        Single-row scratchpad. One free-form markdown document the
+        trip planners use as a general notepad (RV owner's notes,
+        random reference info, etc.). Keyed by a fixed string id so
+        the row stays at "id=main" forever; we don't model a list.
+    -->
+
+    <changeSet id="008-note" author="rv-server">
+        <createTable tableName="note">
+            <column name="id" type="TEXT">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="markdown" type="TEXT" defaultValue="">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <!-- Seed the single row so PUT-by-id is always an UPDATE. -->
+        <insert tableName="note">
+            <column name="id" value="main"/>
+            <column name="markdown" value=""/>
+        </insert>
+    </changeSet>
+
+</databaseChangeLog>

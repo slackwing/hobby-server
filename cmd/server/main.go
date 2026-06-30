@@ -131,6 +131,8 @@ func main() {
 				sub.With(authMW).Post("/itinerary", rvedit.HandleUpsertItinerary(rvStore))
 				sub.With(authMW).Patch("/itinerary/{id}", rvedit.HandlePatchItinerary(rvStore))
 				sub.With(authMW).Delete("/itinerary/{id}", rvedit.HandleDeleteItinerary(rvStore))
+				sub.Get("/note", rvedit.HandleGetNote(rvStore))
+				sub.With(authMW).Put("/note", rvedit.HandlePutNote(rvStore))
 			}
 		})
 	}
