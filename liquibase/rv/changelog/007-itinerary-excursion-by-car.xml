@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        Adds itinerary_override.excursion_by_car — boolean flag meaning
+        the excursion is driven in a regular car (rental), not the RV.
+        When true, the drive-time calc for the excursion day skips the
+        mountain/interstate RV padding. Default false.
+    -->
+
+    <changeSet id="007-itinerary-excursion-by-car" author="rv-server">
+        <addColumn tableName="itinerary_override">
+            <column name="excursion_by_car" type="BOOLEAN" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

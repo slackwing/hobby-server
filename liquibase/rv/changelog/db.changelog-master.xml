@@ -16,5 +16,6 @@
     <include file="changelog/004-itinerary-and-locations.xml"/>
     <include file="changelog/005-location-day-card-label.xml"/>
     <include file="changelog/006-itinerary-excursion.xml"/>
+    <include file="changelog/007-itinerary-excursion-by-car.xml"/>
 
 </databaseChangeLog>
