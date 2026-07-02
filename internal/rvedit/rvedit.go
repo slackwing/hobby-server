@@ -31,6 +31,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -779,10 +780,11 @@ type DunkinLog struct {
 	Count     int       `json:"count"`
 	Note      *string   `json:"note"`
 	UserID    *string   `json:"user_id"`
+	IsSeed    bool      `json:"is_seed"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
-const dunkinColumns = "id, count, note, user_id, created_at"
+const dunkinColumns = "id, count, note, user_id, is_seed, created_at"
 
 func (s *Store) ListDunkin(ctx context.Context) ([]DunkinLog, error) {
 	rows, err := s.pool.Query(ctx,
@@ -795,7 +797,7 @@ func (s *Store) ListDunkin(ctx context.Context) ([]DunkinLog, error) {
 	out := make([]DunkinLog, 0)
 	for rows.Next() {
 		var l DunkinLog
-		if err := rows.Scan(&l.ID, &l.Count, &l.Note, &l.UserID, &l.CreatedAt); err != nil {
+		if err := rows.Scan(&l.ID, &l.Count, &l.Note, &l.UserID, &l.IsSeed, &l.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, l)
@@ -803,10 +805,14 @@ func (s *Store) ListDunkin(ctx context.Context) ([]DunkinLog, error) {
 	return out, rows.Err()
 }
 
+// LatestDunkinCount returns the highest non-seed count so far, which
+// is what the auto-increment path (POST with empty body) uses. Seed
+// rows are display-only — they shouldn't inflate the real running
+// total when the trip's first genuine sighting is logged.
 func (s *Store) LatestDunkinCount(ctx context.Context) (int, error) {
 	var c int
 	err := s.pool.QueryRow(ctx,
-		`SELECT count FROM dunkin_log ORDER BY created_at DESC LIMIT 1`,
+		`SELECT count FROM dunkin_log WHERE is_seed = FALSE ORDER BY created_at DESC LIMIT 1`,
 	).Scan(&c)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, nil
@@ -821,6 +827,9 @@ type createDunkinReq struct {
 	// backfilling test data or logging a sighting we forgot about
 	// hours ago. When omitted, the DB defaults to NOW().
 	CreatedAt *time.Time `json:"created_at"`
+	// Optional. Marks the row as demo / sample data. The frontend
+	// shows seed rows only when no real (non-seed) rows exist yet.
+	IsSeed *bool `json:"is_seed"`
 }
 
 func (s *Store) CreateDunkin(ctx context.Context, req createDunkinReq, userID string) (DunkinLog, error) {
@@ -839,22 +848,27 @@ func (s *Store) CreateDunkin(ctx context.Context, req createDunkinReq, userID st
 	if userID != "" {
 		uid = &userID
 	}
-	var l DunkinLog
+	// Dynamic INSERT so each combination of optional fields (created_at,
+	// is_seed) doesn't need its own statement.
+	cols := []string{"count", "note", "user_id"}
+	vals := []any{count, req.Note, uid}
+	placeholders := []string{"$1", "$2", "$3"}
 	if req.CreatedAt != nil {
-		err := s.pool.QueryRow(ctx, `
-			INSERT INTO dunkin_log (count, note, user_id, created_at)
-			VALUES ($1, $2, $3, $4)
-			RETURNING `+dunkinColumns,
-			count, req.Note, uid, *req.CreatedAt,
-		).Scan(&l.ID, &l.Count, &l.Note, &l.UserID, &l.CreatedAt)
-		return l, err
+		cols = append(cols, "created_at")
+		vals = append(vals, *req.CreatedAt)
+		placeholders = append(placeholders, "$"+strconv.Itoa(len(vals)))
 	}
-	err := s.pool.QueryRow(ctx, `
-		INSERT INTO dunkin_log (count, note, user_id)
-		VALUES ($1, $2, $3)
-		RETURNING `+dunkinColumns,
-		count, req.Note, uid,
-	).Scan(&l.ID, &l.Count, &l.Note, &l.UserID, &l.CreatedAt)
+	if req.IsSeed != nil {
+		cols = append(cols, "is_seed")
+		vals = append(vals, *req.IsSeed)
+		placeholders = append(placeholders, "$"+strconv.Itoa(len(vals)))
+	}
+	q := "INSERT INTO dunkin_log (" + strings.Join(cols, ", ") + ") VALUES (" +
+		strings.Join(placeholders, ", ") + ") RETURNING " + dunkinColumns
+	var l DunkinLog
+	err := s.pool.QueryRow(ctx, q, vals...).Scan(
+		&l.ID, &l.Count, &l.Note, &l.UserID, &l.IsSeed, &l.CreatedAt,
+	)
 	return l, err
 }
 

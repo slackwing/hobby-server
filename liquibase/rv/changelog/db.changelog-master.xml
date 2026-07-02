@@ -20,5 +20,6 @@
     <include file="changelog/008-notes.xml"/>
     <include file="changelog/009-checkins.xml"/>
     <include file="changelog/010-dunkin.xml"/>
+    <include file="changelog/011-dunkin-seed-flag.xml"/>
 
 </databaseChangeLog>

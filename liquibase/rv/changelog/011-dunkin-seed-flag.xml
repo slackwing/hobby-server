@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        Adds dunkin_log.is_seed — a flag for demo / sample rows that
+        the frontend renders as a placeholder chart before the trip
+        starts, then automatically ignores once a real sighting has
+        been logged.
+    -->
+
+    <changeSet id="011-dunkin-seed-flag" author="rv-server">
+        <addColumn tableName="dunkin_log">
+            <column name="is_seed" type="BOOLEAN" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>
