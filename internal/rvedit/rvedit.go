@@ -817,6 +817,10 @@ func (s *Store) LatestDunkinCount(ctx context.Context) (int, error) {
 type createDunkinReq struct {
 	Count *int    `json:"count"`
 	Note  *string `json:"note"`
+	// Optional. Lets an authed client backdate a row — useful for
+	// backfilling test data or logging a sighting we forgot about
+	// hours ago. When omitted, the DB defaults to NOW().
+	CreatedAt *time.Time `json:"created_at"`
 }
 
 func (s *Store) CreateDunkin(ctx context.Context, req createDunkinReq, userID string) (DunkinLog, error) {
@@ -836,6 +840,15 @@ func (s *Store) CreateDunkin(ctx context.Context, req createDunkinReq, userID st
 		uid = &userID
 	}
 	var l DunkinLog
+	if req.CreatedAt != nil {
+		err := s.pool.QueryRow(ctx, `
+			INSERT INTO dunkin_log (count, note, user_id, created_at)
+			VALUES ($1, $2, $3, $4)
+			RETURNING `+dunkinColumns,
+			count, req.Note, uid, *req.CreatedAt,
+		).Scan(&l.ID, &l.Count, &l.Note, &l.UserID, &l.CreatedAt)
+		return l, err
+	}
 	err := s.pool.QueryRow(ctx, `
 		INSERT INTO dunkin_log (count, note, user_id)
 		VALUES ($1, $2, $3)
