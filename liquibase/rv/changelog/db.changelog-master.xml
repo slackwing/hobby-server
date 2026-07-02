@@ -18,5 +18,6 @@
     <include file="changelog/006-itinerary-excursion.xml"/>
     <include file="changelog/007-itinerary-excursion-by-car.xml"/>
     <include file="changelog/008-notes.xml"/>
+    <include file="changelog/009-checkins.xml"/>
 
 </databaseChangeLog>

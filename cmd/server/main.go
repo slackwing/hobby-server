@@ -133,6 +133,8 @@ func main() {
 				sub.With(authMW).Delete("/itinerary/{id}", rvedit.HandleDeleteItinerary(rvStore))
 				sub.Get("/note", rvedit.HandleGetNote(rvStore))
 				sub.With(authMW).Put("/note", rvedit.HandlePutNote(rvStore))
+				sub.Get("/checkins", rvedit.HandleListCheckins(rvStore))
+				sub.With(authMW).Post("/checkins", rvedit.HandleCreateCheckin(rvStore))
 			}
 		})
 	}

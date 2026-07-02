@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        Live-location check-ins. When a logged-in user (Andrew or Abi)
+        clicks "check in" on the hero, we grab their current lat/lon
+        from the browser's geolocation API and drop a row here. The
+        map renders the MOST RECENT one as a pulsing blue dot so
+        friends can see where we are.
+
+        Full history is preserved (not just the latest) so we can
+        eventually draw a breadcrumb trail. Route is public read.
+    -->
+
+    <changeSet id="009-checkin" author="rv-server">
+        <createTable tableName="checkin">
+            <column name="id" type="BIGSERIAL">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="lat" type="DOUBLE PRECISION">
+                <constraints nullable="false"/>
+            </column>
+            <column name="lon" type="DOUBLE PRECISION">
+                <constraints nullable="false"/>
+            </column>
+            <!-- Meters of horizontal accuracy from the browser's API,
+                 when available. Purely informational. -->
+            <column name="accuracy_m" type="DOUBLE PRECISION"/>
+            <!-- Free-form note the user typed at check-in time. NULL
+                 when they just clicked the button without a note. -->
+            <column name="note" type="TEXT"/>
+            <!-- Which authenticated user checked in — kept so we can
+                 later attribute check-ins per person. -->
+            <column name="user_id" type="TEXT"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <createIndex tableName="checkin" indexName="idx_checkin_created_at">
+            <column name="created_at"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

@@ -36,6 +36,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/slackwing/hobby-server/internal/auth"
 )
 
 // ============================================================
@@ -182,9 +184,11 @@ func (s *Store) PatchLocation(ctx context.Context, id string, req patchLocReq) (
 }
 
 // SoftDeleteLocation marks the row as deleted (sets deleted_at = NOW()).
-// Catalog overrides still exist in the DB but the frontend will treat
-// them as not-overridden (fall through to catalog). New user locations
-// are hidden from the map until restored via PATCH with restore:true.
+// The frontend hides any location whose effective record has
+// deleted_at set — both catalog overrides and brand-new user
+// locations. Restore via PATCH with restore:true. To reset an
+// override (fall back to catalog values), use the ?hard=true DELETE
+// variant, which removes the row entirely.
 func (s *Store) SoftDeleteLocation(ctx context.Context, id string) error {
 	tag, err := s.pool.Exec(ctx, `UPDATE location_user SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1`, id)
 	if err != nil {
@@ -622,5 +626,136 @@ func HandlePutNote(store *Store) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, n)
+	}
+}
+
+// ============================================================
+// checkin (live-location breadcrumbs)
+// ============================================================
+//
+// Routes:
+//   GET  /checkins                → public; the most recent check-in
+//                                   as {latest: {...}} (or {latest: null})
+//   GET  /checkins?history=true   → public; up to 200 recent check-ins
+//                                   as {history: [...]}
+//   POST /checkins                → auth;  create one
+//
+// The map renders `latest` as a pulsing blue dot. History is there
+// for future "breadcrumb trail" UI.
+
+type Checkin struct {
+	ID         int64     `json:"id"`
+	Lat        float64   `json:"lat"`
+	Lon        float64   `json:"lon"`
+	AccuracyM  *float64  `json:"accuracy_m"`
+	Note       *string   `json:"note"`
+	UserID     *string   `json:"user_id"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+const checkinColumns = "id, lat, lon, accuracy_m, note, user_id, created_at"
+
+func (s *Store) LatestCheckin(ctx context.Context) (*Checkin, error) {
+	var c Checkin
+	err := s.pool.QueryRow(ctx,
+		`SELECT `+checkinColumns+` FROM checkin ORDER BY created_at DESC LIMIT 1`,
+	).Scan(&c.ID, &c.Lat, &c.Lon, &c.AccuracyM, &c.Note, &c.UserID, &c.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+func (s *Store) CheckinHistory(ctx context.Context, limit int) ([]Checkin, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT `+checkinColumns+` FROM checkin ORDER BY created_at DESC LIMIT $1`, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]Checkin, 0)
+	for rows.Next() {
+		var c Checkin
+		if err := rows.Scan(&c.ID, &c.Lat, &c.Lon, &c.AccuracyM, &c.Note, &c.UserID, &c.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+type createCheckinReq struct {
+	Lat       float64  `json:"lat"`
+	Lon       float64  `json:"lon"`
+	AccuracyM *float64 `json:"accuracy_m"`
+	Note      *string  `json:"note"`
+}
+
+func (s *Store) CreateCheckin(ctx context.Context, req createCheckinReq, userID string) (Checkin, error) {
+	var c Checkin
+	var uid *string
+	if userID != "" {
+		uid = &userID
+	}
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO checkin (lat, lon, accuracy_m, note, user_id)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING `+checkinColumns,
+		req.Lat, req.Lon, req.AccuracyM, req.Note, uid,
+	).Scan(&c.ID, &c.Lat, &c.Lon, &c.AccuracyM, &c.Note, &c.UserID, &c.CreatedAt)
+	return c, err
+}
+
+func HandleListCheckins(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("history") == "true" {
+			hist, err := store.CheckinHistory(r.Context(), 200)
+			if err != nil {
+				log.Printf("rvedit checkins history: %v", err)
+				http.Error(w, "internal error", http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"history": hist})
+			return
+		}
+		latest, err := store.LatestCheckin(r.Context())
+		if err != nil {
+			log.Printf("rvedit checkins latest: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"latest": latest})
+	}
+}
+
+func HandleCreateCheckin(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req createCheckinReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		if req.Lat < -90 || req.Lat > 90 || req.Lon < -180 || req.Lon > 180 {
+			http.Error(w, "lat/lon out of range", http.StatusBadRequest)
+			return
+		}
+		userID := ""
+		if s, ok := auth.GetSession(r); ok && s != nil {
+			userID = s.Username
+		}
+		c, err := store.CreateCheckin(r.Context(), req, userID)
+		if err != nil {
+			log.Printf("rvedit create checkin: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusCreated, c)
 	}
 }
