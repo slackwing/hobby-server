@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        Dunkin' Donuts sighting counter. Andrew, Abi, and two friends
+        made a bet on the total Dunkin' count for the trip. Each row is
+        a running-total snapshot (not a delta) so the chart can plot
+        each log entry as a point and draw an extrapolation to the
+        trip end.
+    -->
+
+    <changeSet id="010-dunkin" author="rv-server">
+        <createTable tableName="dunkin_log">
+            <column name="id" type="BIGSERIAL">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <!-- The cumulative count AT this log time. Frontend just
+                 plots dots; nothing here derives a delta. -->
+            <column name="count" type="INTEGER">
+                <constraints nullable="false"/>
+            </column>
+            <column name="note" type="TEXT"/>
+            <column name="user_id" type="TEXT"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <createIndex tableName="dunkin_log" indexName="idx_dunkin_log_created_at">
+            <column name="created_at"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

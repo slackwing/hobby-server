@@ -759,3 +759,124 @@ func HandleCreateCheckin(store *Store) http.HandlerFunc {
 		writeJSON(w, http.StatusCreated, c)
 	}
 }
+
+// ============================================================
+// dunkin_log (dunkin' sighting counter — trip bet)
+// ============================================================
+//
+// Routes:
+//   GET  /dunkin           → public; all log rows ordered by created_at
+//   POST /dunkin           → auth;   append a new log entry
+//                                    body: {count int, note string?}
+//
+// Each row is a running-total snapshot; the frontend does the delta
+// math + extrapolation. If a POST omits count, the server auto-picks
+// (latest count + 1) — so the header button can just POST {} to
+// increment.
+
+type DunkinLog struct {
+	ID        int64     `json:"id"`
+	Count     int       `json:"count"`
+	Note      *string   `json:"note"`
+	UserID    *string   `json:"user_id"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+const dunkinColumns = "id, count, note, user_id, created_at"
+
+func (s *Store) ListDunkin(ctx context.Context) ([]DunkinLog, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT `+dunkinColumns+` FROM dunkin_log ORDER BY created_at ASC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]DunkinLog, 0)
+	for rows.Next() {
+		var l DunkinLog
+		if err := rows.Scan(&l.ID, &l.Count, &l.Note, &l.UserID, &l.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) LatestDunkinCount(ctx context.Context) (int, error) {
+	var c int
+	err := s.pool.QueryRow(ctx,
+		`SELECT count FROM dunkin_log ORDER BY created_at DESC LIMIT 1`,
+	).Scan(&c)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, nil
+	}
+	return c, err
+}
+
+type createDunkinReq struct {
+	Count *int    `json:"count"`
+	Note  *string `json:"note"`
+}
+
+func (s *Store) CreateDunkin(ctx context.Context, req createDunkinReq, userID string) (DunkinLog, error) {
+	// Auto-increment when count omitted.
+	count := 0
+	if req.Count != nil {
+		count = *req.Count
+	} else {
+		latest, err := s.LatestDunkinCount(ctx)
+		if err != nil {
+			return DunkinLog{}, err
+		}
+		count = latest + 1
+	}
+	var uid *string
+	if userID != "" {
+		uid = &userID
+	}
+	var l DunkinLog
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO dunkin_log (count, note, user_id)
+		VALUES ($1, $2, $3)
+		RETURNING `+dunkinColumns,
+		count, req.Note, uid,
+	).Scan(&l.ID, &l.Count, &l.Note, &l.UserID, &l.CreatedAt)
+	return l, err
+}
+
+func HandleListDunkin(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logs, err := store.ListDunkin(r.Context())
+		if err != nil {
+			log.Printf("rvedit list dunkin: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"logs": logs})
+	}
+}
+
+func HandleCreateDunkin(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req createDunkinReq
+		// Empty body is OK — auto-increment.
+		if r.ContentLength > 0 {
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "bad json", http.StatusBadRequest)
+				return
+			}
+		}
+		userID := ""
+		if s, ok := auth.GetSession(r); ok && s != nil {
+			userID = s.Username
+		}
+		l, err := store.CreateDunkin(r.Context(), req, userID)
+		if err != nil {
+			log.Printf("rvedit create dunkin: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusCreated, l)
+	}
+}

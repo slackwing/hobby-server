@@ -135,6 +135,8 @@ func main() {
 				sub.With(authMW).Put("/note", rvedit.HandlePutNote(rvStore))
 				sub.Get("/checkins", rvedit.HandleListCheckins(rvStore))
 				sub.With(authMW).Post("/checkins", rvedit.HandleCreateCheckin(rvStore))
+				sub.Get("/dunkin", rvedit.HandleListDunkin(rvStore))
+				sub.With(authMW).Post("/dunkin", rvedit.HandleCreateDunkin(rvStore))
 			}
 		})
 	}
