@@ -141,6 +141,11 @@ func main() {
 				sub.With(authMW).Post("/dunkin/participants", rvedit.HandleCreateDunkinParticipant(rvStore))
 				sub.With(authMW).Patch("/dunkin/participants/{id}", rvedit.HandlePatchDunkinParticipant(rvStore))
 				sub.With(authMW).Delete("/dunkin/participants/{id}", rvedit.HandleDeleteDunkinParticipant(rvStore))
+				// Public read + public write (with per-IP rate limit on
+				// the server side) so anyone on the internet can doodle.
+				sub.Get("/draw/canvas", rvedit.HandleGetDrawCanvas(rvStore))
+				sub.Get("/draw/strokes", rvedit.HandleListDrawStrokes(rvStore))
+				sub.Post("/draw/strokes", rvedit.HandleCreateDrawStroke(rvStore))
 			}
 		})
 	}

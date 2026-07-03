@@ -22,5 +22,6 @@
     <include file="changelog/010-dunkin.xml"/>
     <include file="changelog/011-dunkin-seed-flag.xml"/>
     <include file="changelog/012-dunkin-participants.xml"/>
+    <include file="changelog/013-draw.xml"/>
 
 </databaseChangeLog>

@@ -28,6 +28,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -1102,5 +1103,202 @@ func HandleDeleteDunkinParticipant(store *Store) http.HandlerFunc {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// ============================================================
+// draw — shared "everyone can draw" canvas
+// ============================================================
+//
+// Routes:
+//   GET  /draw/canvas               → public; canvas metadata
+//                                     {id, width, height}
+//   GET  /draw/strokes?since=<ms>   → public; strokes newer than the
+//                                     given unix-milli cursor. Client
+//                                     polls this at a few-second
+//                                     cadence for real-time-ish
+//                                     collaboration.
+//   POST /draw/strokes              → PUBLIC (no auth); appends one
+//                                     stroke. Rate-limited by IP.
+//
+// A stroke is a JSON object: {tool, color, radius, points:[[x,y]...]}.
+// Server treats the JSON as opaque — the client validates + renders.
+
+type DrawCanvas struct {
+	ID     string `json:"id"`
+	Width  int    `json:"width"`
+	Height int    `json:"height"`
+}
+
+// DrawStroke has the raw json + a server-issued timestamp. We use
+// unix-milli in JSON so clients can pass ?since=<int> back verbatim.
+type DrawStroke struct {
+	ID           int64           `json:"id"`
+	CanvasID     string          `json:"canvas_id"`
+	Stroke       json.RawMessage `json:"stroke"`
+	CreatedAtMs  int64           `json:"created_at_ms"`
+}
+
+const strokeRateWindowMs = 500 // one stroke per 500 ms per IP
+
+func (s *Store) GetDrawCanvas(ctx context.Context, id string) (DrawCanvas, error) {
+	var c DrawCanvas
+	err := s.pool.QueryRow(ctx,
+		`SELECT id, width, height FROM draw_canvas WHERE id = $1`, id,
+	).Scan(&c.ID, &c.Width, &c.Height)
+	return c, err
+}
+
+func (s *Store) ListDrawStrokes(ctx context.Context, canvasID string, sinceMs int64, limit int) ([]DrawStroke, error) {
+	if limit <= 0 || limit > 5000 {
+		limit = 2000
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, canvas_id, stroke,
+		       (EXTRACT(EPOCH FROM created_at) * 1000)::BIGINT AS created_at_ms
+		FROM draw_stroke
+		WHERE canvas_id = $1
+		  AND (EXTRACT(EPOCH FROM created_at) * 1000)::BIGINT > $2
+		ORDER BY id ASC
+		LIMIT $3
+	`, canvasID, sinceMs, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]DrawStroke, 0)
+	for rows.Next() {
+		var d DrawStroke
+		if err := rows.Scan(&d.ID, &d.CanvasID, &d.Stroke, &d.CreatedAtMs); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// CheckAndInsertStroke enforces the per-IP rate limit inside a single
+// SQL statement so two racing requests can't both slip through. If a
+// stroke from this IP landed within the last strokeRateWindowMs ms,
+// the INSERT is skipped and we return isRateLimited=true.
+func (s *Store) CheckAndInsertStroke(ctx context.Context, canvasID string, stroke []byte, ip string) (DrawStroke, bool, error) {
+	// The CTE checks the IP's most recent stroke; if it's newer than
+	// the rate window, `insert_ok` is empty and no row is inserted.
+	q := `
+		WITH last_ip AS (
+			SELECT MAX(created_at) AS ts
+			FROM draw_stroke
+			WHERE client_ip = $3
+		),
+		insert_ok AS (
+			SELECT 1
+			WHERE COALESCE(
+				EXTRACT(EPOCH FROM (NOW() - (SELECT ts FROM last_ip))) * 1000,
+				999999999
+			) >= $4
+		),
+		ins AS (
+			INSERT INTO draw_stroke (canvas_id, stroke, client_ip)
+			SELECT $1, $2::JSONB, $3
+			WHERE EXISTS (SELECT 1 FROM insert_ok)
+			RETURNING id, canvas_id, stroke,
+			          (EXTRACT(EPOCH FROM created_at) * 1000)::BIGINT AS created_at_ms
+		)
+		SELECT * FROM ins
+	`
+	var d DrawStroke
+	err := s.pool.QueryRow(ctx, q, canvasID, string(stroke), ip, strokeRateWindowMs).Scan(
+		&d.ID, &d.CanvasID, &d.Stroke, &d.CreatedAtMs,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return DrawStroke{}, true, nil // rate-limited
+	}
+	if err != nil {
+		return DrawStroke{}, false, err
+	}
+	return d, false, nil
+}
+
+// clientIP returns the caller's IP for rate-limit accounting. Apache
+// puts the real client in X-Forwarded-For; the last comma-separated
+// entry is the closest hop. Falls back to RemoteAddr.
+func clientIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		// Trust the first entry — Apache's mod_proxy sets it to the
+		// direct client. Trim + strip any port.
+		parts := strings.Split(xff, ",")
+		return strings.TrimSpace(parts[0])
+	}
+	// RemoteAddr is host:port; drop the port.
+	if idx := strings.LastIndex(r.RemoteAddr, ":"); idx > 0 {
+		return r.RemoteAddr[:idx]
+	}
+	return r.RemoteAddr
+}
+
+func HandleGetDrawCanvas(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		c, err := store.GetDrawCanvas(r.Context(), "main")
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			log.Printf("rvedit get canvas: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, c)
+	}
+}
+
+func HandleListDrawStrokes(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		sinceMs := int64(0)
+		if s := r.URL.Query().Get("since"); s != "" {
+			if v, err := strconv.ParseInt(s, 10, 64); err == nil && v >= 0 {
+				sinceMs = v
+			}
+		}
+		list, err := store.ListDrawStrokes(r.Context(), "main", sinceMs, 2000)
+		if err != nil {
+			log.Printf("rvedit list strokes: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"strokes": list})
+	}
+}
+
+func HandleCreateDrawStroke(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Cap the body so bots can't ship enormous strokes. 16 KB is
+		// plenty for even a very dense path in JSON.
+		r.Body = http.MaxBytesReader(w, r.Body, 16*1024)
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "body too large or unreadable", http.StatusBadRequest)
+			return
+		}
+		// Validate that it's at least well-formed JSON so we don't
+		// insert junk into JSONB.
+		var probe map[string]any
+		if err := json.Unmarshal(body, &probe); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		ip := clientIP(r)
+		d, limited, err := store.CheckAndInsertStroke(r.Context(), "main", body, ip)
+		if err != nil {
+			log.Printf("rvedit create stroke: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if limited {
+			w.Header().Set("Retry-After", "1")
+			http.Error(w, "rate limited", http.StatusTooManyRequests)
+			return
+		}
+		writeJSON(w, http.StatusCreated, d)
 	}
 }

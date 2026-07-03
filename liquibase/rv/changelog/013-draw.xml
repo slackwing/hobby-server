@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        Shared "everyone can draw on it" canvas. One canvas per row
+        (keyed by id="main" for now) and an append-only log of strokes.
+        Public read + public write — the doodle widget is a shared toy,
+        not a privileged surface.
+
+        On each mouseup the client posts a stroke: color + radius +
+        list of (x, y) points normalized to the canvas coordinate
+        space stored on the row. Other clients poll ?since=<ts> at a
+        few-second cadence and paint any strokes they haven't seen.
+        Timestamp order = paint order.
+    -->
+
+    <changeSet id="013-draw-canvas" author="rv-server">
+        <createTable tableName="draw_canvas">
+            <column name="id" type="TEXT">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="width" type="INTEGER" defaultValueNumeric="800">
+                <constraints nullable="false"/>
+            </column>
+            <column name="height" type="INTEGER" defaultValueNumeric="300">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <insert tableName="draw_canvas">
+            <column name="id" value="main"/>
+            <column name="width" valueNumeric="800"/>
+            <column name="height" valueNumeric="300"/>
+        </insert>
+    </changeSet>
+
+    <changeSet id="013-draw-stroke" author="rv-server">
+        <createTable tableName="draw_stroke">
+            <column name="id" type="BIGSERIAL">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="canvas_id" type="TEXT" defaultValue="main">
+                <constraints nullable="false"/>
+            </column>
+            <!-- Full stroke payload as JSON: {tool, color, radius, points:[[x,y]...]}. -->
+            <column name="stroke" type="JSONB">
+                <constraints nullable="false"/>
+            </column>
+            <!-- Best-effort client IP for rate-limit accounting. -->
+            <column name="client_ip" type="TEXT"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <createIndex tableName="draw_stroke" indexName="idx_draw_stroke_canvas_created">
+            <column name="canvas_id"/>
+            <column name="created_at"/>
+        </createIndex>
+        <createIndex tableName="draw_stroke" indexName="idx_draw_stroke_ip_created">
+            <column name="client_ip"/>
+            <column name="created_at"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>
