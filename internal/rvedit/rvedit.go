@@ -907,3 +907,200 @@ func HandleCreateDunkin(store *Store) http.HandlerFunc {
 		writeJSON(w, http.StatusCreated, l)
 	}
 }
+
+// ============================================================
+// dunkin_participant — the people making the sighting bet
+// ============================================================
+//
+// Routes:
+//   GET    /dunkin/participants          → public
+//   POST   /dunkin/participants          → auth (create)
+//   PATCH  /dunkin/participants/{id}     → auth (partial update)
+//   DELETE /dunkin/participants/{id}     → auth (hard delete)
+
+type DunkinParticipant struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Guess     int       `json:"guess"`
+	Color     string    `json:"color"`
+	SortOrder float64   `json:"sort_order"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+const dunkinParticipantColumns = "id, name, guess, color, sort_order, created_at, updated_at"
+
+func (s *Store) ListDunkinParticipants(ctx context.Context) ([]DunkinParticipant, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT `+dunkinParticipantColumns+` FROM dunkin_participant ORDER BY sort_order, id`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]DunkinParticipant, 0)
+	for rows.Next() {
+		var p DunkinParticipant
+		if err := rows.Scan(&p.ID, &p.Name, &p.Guess, &p.Color, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+type createDunkinParticipantReq struct {
+	ID        string   `json:"id"`
+	Name      string   `json:"name"`
+	Guess     int      `json:"guess"`
+	Color     *string  `json:"color"`
+	SortOrder *float64 `json:"sort_order"`
+}
+
+func (s *Store) CreateDunkinParticipant(ctx context.Context, req createDunkinParticipantReq) (DunkinParticipant, error) {
+	color := "#4a7fa0"
+	if req.Color != nil && *req.Color != "" {
+		color = *req.Color
+	}
+	sortOrder := 100.0
+	if req.SortOrder != nil {
+		sortOrder = *req.SortOrder
+	} else {
+		// Default to end of the list: max(sort_order)+10.
+		var maxSort *float64
+		_ = s.pool.QueryRow(ctx, `SELECT MAX(sort_order) FROM dunkin_participant`).Scan(&maxSort)
+		if maxSort != nil {
+			sortOrder = *maxSort + 10
+		}
+	}
+	var p DunkinParticipant
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO dunkin_participant (id, name, guess, color, sort_order)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING `+dunkinParticipantColumns,
+		req.ID, req.Name, req.Guess, color, sortOrder,
+	).Scan(&p.ID, &p.Name, &p.Guess, &p.Color, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt)
+	return p, err
+}
+
+type patchDunkinParticipantReq struct {
+	Name      *string  `json:"name"`
+	Guess     *int     `json:"guess"`
+	Color     *string  `json:"color"`
+	SortOrder *float64 `json:"sort_order"`
+}
+
+func (s *Store) PatchDunkinParticipant(ctx context.Context, id string, req patchDunkinParticipantReq) (DunkinParticipant, error) {
+	sets := []string{"updated_at = NOW()"}
+	args := []any{id}
+	addArg := func(col string, v any) {
+		args = append(args, v)
+		sets = append(sets, col+" = $"+strconv.Itoa(len(args)))
+	}
+	if req.Name != nil {
+		addArg("name", *req.Name)
+	}
+	if req.Guess != nil {
+		addArg("guess", *req.Guess)
+	}
+	if req.Color != nil {
+		addArg("color", *req.Color)
+	}
+	if req.SortOrder != nil {
+		addArg("sort_order", *req.SortOrder)
+	}
+	q := "UPDATE dunkin_participant SET " + joinSets(sets) + " WHERE id = $1 RETURNING " + dunkinParticipantColumns
+	var p DunkinParticipant
+	err := s.pool.QueryRow(ctx, q, args...).Scan(&p.ID, &p.Name, &p.Guess, &p.Color, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt)
+	return p, err
+}
+
+func (s *Store) DeleteDunkinParticipant(ctx context.Context, id string) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM dunkin_participant WHERE id = $1`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
+func HandleListDunkinParticipants(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		list, err := store.ListDunkinParticipants(r.Context())
+		if err != nil {
+			log.Printf("rvedit list dunkin participants: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"participants": list})
+	}
+}
+
+func HandleCreateDunkinParticipant(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req createDunkinParticipantReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		if req.ID == "" || req.Name == "" {
+			http.Error(w, "id and name required", http.StatusBadRequest)
+			return
+		}
+		p, err := store.CreateDunkinParticipant(r.Context(), req)
+		if err != nil {
+			log.Printf("rvedit create dunkin participant: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusCreated, p)
+	}
+}
+
+func HandlePatchDunkinParticipant(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		if id == "" {
+			http.Error(w, "bad id", http.StatusBadRequest)
+			return
+		}
+		var req patchDunkinParticipantReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		p, err := store.PatchDunkinParticipant(r.Context(), id, req)
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			log.Printf("rvedit patch dunkin participant: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, p)
+	}
+}
+
+func HandleDeleteDunkinParticipant(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		if id == "" {
+			http.Error(w, "bad id", http.StatusBadRequest)
+			return
+		}
+		if err := store.DeleteDunkinParticipant(r.Context(), id); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			log.Printf("rvedit delete dunkin participant: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}

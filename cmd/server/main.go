@@ -137,6 +137,10 @@ func main() {
 				sub.With(authMW).Post("/checkins", rvedit.HandleCreateCheckin(rvStore))
 				sub.Get("/dunkin", rvedit.HandleListDunkin(rvStore))
 				sub.With(authMW).Post("/dunkin", rvedit.HandleCreateDunkin(rvStore))
+				sub.Get("/dunkin/participants", rvedit.HandleListDunkinParticipants(rvStore))
+				sub.With(authMW).Post("/dunkin/participants", rvedit.HandleCreateDunkinParticipant(rvStore))
+				sub.With(authMW).Patch("/dunkin/participants/{id}", rvedit.HandlePatchDunkinParticipant(rvStore))
+				sub.With(authMW).Delete("/dunkin/participants/{id}", rvedit.HandleDeleteDunkinParticipant(rvStore))
 			}
 		})
 	}

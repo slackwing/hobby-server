@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        Dunkin' bet participants — the people whose guesses render as
+        target lines + avatars on the chart. Previously hardcoded in
+        assets/dunkin.js; now editable through a small admin page.
+    -->
+
+    <changeSet id="012-dunkin-participant" author="rv-server">
+        <createTable tableName="dunkin_participant">
+            <column name="id" type="TEXT">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="name" type="TEXT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="guess" type="INTEGER">
+                <constraints nullable="false"/>
+            </column>
+            <!-- Hex color used on the guess line, avatar chip, and popover. -->
+            <column name="color" type="TEXT" defaultValue="#4a7fa0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="sort_order" type="DOUBLE PRECISION" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <!-- Seed with the current in-code participants so nothing visually
+             changes on first deploy. -->
+        <insert tableName="dunkin_participant">
+            <column name="id" value="andrew"/>
+            <column name="name" value="Andrew"/>
+            <column name="guess" valueNumeric="43"/>
+            <column name="color" value="#FF6720"/>
+            <column name="sort_order" valueNumeric="10"/>
+        </insert>
+        <insert tableName="dunkin_participant">
+            <column name="id" value="abi"/>
+            <column name="name" value="Abi"/>
+            <column name="guess" valueNumeric="56"/>
+            <column name="color" value="#DA1884"/>
+            <column name="sort_order" valueNumeric="20"/>
+        </insert>
+        <insert tableName="dunkin_participant">
+            <column name="id" value="hayoung"/>
+            <column name="name" value="Hayoung"/>
+            <column name="guess" valueNumeric="30"/>
+            <column name="color" value="#4a7fa0"/>
+            <column name="sort_order" valueNumeric="30"/>
+        </insert>
+        <insert tableName="dunkin_participant">
+            <column name="id" value="keunwoo"/>
+            <column name="name" value="Keunwoo"/>
+            <column name="guess" valueNumeric="85"/>
+            <column name="color" value="#2f8a6e"/>
+            <column name="sort_order" valueNumeric="40"/>
+        </insert>
+        <insert tableName="dunkin_participant">
+            <column name="id" value="kimmy"/>
+            <column name="name" value="Kimmy"/>
+            <column name="guess" valueNumeric="26"/>
+            <column name="color" value="#a05fb0"/>
+            <column name="sort_order" valueNumeric="50"/>
+        </insert>
+        <insert tableName="dunkin_participant">
+            <column name="id" value="tina"/>
+            <column name="name" value="Tina"/>
+            <column name="guess" valueNumeric="47"/>
+            <column name="color" value="#e6a12b"/>
+            <column name="sort_order" valueNumeric="60"/>
+        </insert>
+        <insert tableName="dunkin_participant">
+            <column name="id" value="zongling"/>
+            <column name="name" value="Zong Ling"/>
+            <column name="guess" valueNumeric="40"/>
+            <column name="color" value="#5b8bc9"/>
+            <column name="sort_order" valueNumeric="70"/>
+        </insert>
+    </changeSet>
+
+</databaseChangeLog>
