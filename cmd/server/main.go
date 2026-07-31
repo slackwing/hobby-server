@@ -133,14 +133,25 @@ func main() {
 				sub.With(authMW).Delete("/itinerary/{id}", rvedit.HandleDeleteItinerary(rvStore))
 				sub.Get("/note", rvedit.HandleGetNote(rvStore))
 				sub.With(authMW).Put("/note", rvedit.HandlePutNote(rvStore))
+				// Trip-over lockdown (2026-07-30): check-ins, dunkin
+				// sighting logs, and bet edits are frozen — the trip
+				// is done and the record shouldn't change. Reads stay
+				// public so the site keeps rendering history. Prep /
+				// itinerary / location / note editing stays live for
+				// corrections.
+				locked := func(w http.ResponseWriter, _ *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusForbidden)
+					_, _ = w.Write([]byte(`{"error":"locked: the trip is over"}`))
+				}
 				sub.Get("/checkins", rvedit.HandleListCheckins(rvStore))
-				sub.With(authMW).Post("/checkins", rvedit.HandleCreateCheckin(rvStore))
+				sub.Post("/checkins", locked)
 				sub.Get("/dunkin", rvedit.HandleListDunkin(rvStore))
-				sub.With(authMW).Post("/dunkin", rvedit.HandleCreateDunkin(rvStore))
+				sub.Post("/dunkin", locked)
 				sub.Get("/dunkin/participants", rvedit.HandleListDunkinParticipants(rvStore))
-				sub.With(authMW).Post("/dunkin/participants", rvedit.HandleCreateDunkinParticipant(rvStore))
-				sub.With(authMW).Patch("/dunkin/participants/{id}", rvedit.HandlePatchDunkinParticipant(rvStore))
-				sub.With(authMW).Delete("/dunkin/participants/{id}", rvedit.HandleDeleteDunkinParticipant(rvStore))
+				sub.Post("/dunkin/participants", locked)
+				sub.Patch("/dunkin/participants/{id}", locked)
+				sub.Delete("/dunkin/participants/{id}", locked)
 				// Public read + public write (with per-IP rate limit on
 				// the server side) so anyone on the internet can doodle.
 				sub.Get("/draw/canvas", rvedit.HandleGetDrawCanvas(rvStore))
