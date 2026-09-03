@@ -28,6 +28,10 @@ plugs in by adding a config entry + a changelog dir.
   [feathers RV trip site](https://andrewcheong.com/rv).
   Frontend in `slackwing/feathers`:
   `foundry/website/html/rv/`.
+- **hxh** — auth for the
+  [Hunter × Halloween party site](https://andrewcheong.com/hxh).
+  Frontend in `slackwing/feathers`:
+  `foundry/website/html/hxh/`.
 
 When adding a new project, update the "Currently hosted projects" list
 in this file and in `README.md`.

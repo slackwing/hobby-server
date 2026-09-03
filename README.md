@@ -23,6 +23,10 @@ discipline, Cloud SQL via the Cloud SQL Auth Proxy.
   [RV trip site](https://github.com/slackwing/feathers/tree/master/foundry/website/html/rv).
   Database: `rv_trip`. URL prefix: `/api/rv` (Apache rewrites public
   `/rv/api/*` to this). Cookie path: `/rv/`.
+- **hxh** — auth for the
+  [Hunter × Halloween party site](https://github.com/slackwing/feathers/tree/master/foundry/website/html/hxh).
+  Database: `hxh`. URL prefix: `/api/hxh` (Apache rewrites public
+  `/hxh/api/*` to this). Cookie path: `/hxh/`.
 
 ## Endpoints
 

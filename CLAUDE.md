@@ -17,6 +17,12 @@ schema-related here, look at how manuscript-studio does it.
   [`slackwing/feathers`](https://github.com/slackwing/feathers) at
   `foundry/website/html/rv/` (locally:
   `~/src/feathers/foundry/website/html/rv/`).
+- **hxh** — auth for the
+  [Hunter × Halloween party site](https://andrewcheong.com/hxh).
+  Frontend: same feathers repo at `foundry/website/html/hxh/`.
+  Own database (`hxh`) — unlike rv it does NOT live in the shared
+  `hobby_server` DB, since every project's auth tables share the
+  same `user`/`session` names.
 
 (Keep this list in sync with the one in `README.md` and
 `ARCHITECTURE.md`.)

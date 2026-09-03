@@ -20,3 +20,13 @@ projects:
       password: "devpass"
     url_prefix: "/api/rv"
     cookie_path: "/rv/"
+
+  - name: hxh
+    database:
+      host: "localhost"
+      port: 5433
+      name: "hxh_dev"
+      user: "postgres"
+      password: "devpass"
+    url_prefix: "/api/hxh"
+    cookie_path: "/hxh/"

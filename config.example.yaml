@@ -38,6 +38,18 @@ projects:
     url_prefix: "/api/rv"
     cookie_path: "/rv/"
 
+  - name: hxh
+    database:
+      host: "127.0.0.1"        # Cloud SQL Auth Proxy
+      port: 5432
+      name: "hxh"
+      user: "hxh_user"
+      password: "REPLACE_ME"
+    # Public path is andrewcheong.com/hxh/api/* ; Apache proxies that to
+    # 127.0.0.1:5002/api/hxh/* .
+    url_prefix: "/api/hxh"
+    cookie_path: "/hxh/"
+
   # Add additional projects here:
   #
   # - name: next_thing

@@ -62,6 +62,8 @@ will break the frontend. Each project has paired repos:
 
 - **rv**: feathers' `foundry/website/html/rv/` ↔ this repo's `rv`
   project (config + `liquibase/rv/`)
+- **hxh**: feathers' `foundry/website/html/hxh/` ↔ this repo's `hxh`
+  project (config + `liquibase/hxh/`)
 
 Check both before changing the wire format.
 
