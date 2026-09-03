@@ -56,6 +56,28 @@ See `ARCHITECTURE.md` §7. Short version:
 5. `deploy_latest_hobby_server` on the VM
 6. Apache `<Location>` block proxying public URL → backend
 
+## Querying the prod DB directly
+
+Sometimes you need to inspect prod data (verify overrides landed, compare
+API output vs. DB truth). The Cloud SQL Postgres instance is on a private
+IP; access is through the VM:
+
+```bash
+# 1. Grab the DB password from the VM's hobby-server config:
+ws_ssh 'grep -A3 "name: rv" ~/.config/hobby-server/config.yaml | grep password'
+
+# 2. Run a query (substitute the password from step 1):
+ws_ssh 'PGPASSWORD="<paste-password>" psql -h 10.12.32.3 -U hobby_server -d hobby_server -c "SELECT ... FROM ...;"'
+```
+
+- Host `10.12.32.3` is the Cloud SQL Auth Proxy's private IP.
+- DB name / user are both `hobby_server`.
+- All projects (rv, future) share this one DB; project isolation is by
+  table-name prefix (`rv_...`) — though currently rv tables are
+  unprefixed (`itinerary_override`, `location_user`, `dunkin_log`, ...).
+- `ws_ssh` is a shell alias for `ssh -i ~/.ssh/id_ed25519_gcp_202512
+  acheong87@35.243.192.242`.
+
 ## Deploy
 
 ```bash
