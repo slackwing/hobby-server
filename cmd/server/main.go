@@ -124,6 +124,14 @@ func main() {
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(15 * time.Second))
+	// API responses are session-scoped and dynamic — never cache them
+	// (browser heuristic caching applies when no header is set).
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			w.Header().Set("Cache-Control", "no-store")
+			next.ServeHTTP(w, req)
+		})
+	})
 
 	// One sub-router per project, mounted at the configured URL prefix.
 	for _, s := range states {
