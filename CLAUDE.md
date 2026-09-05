@@ -63,6 +63,8 @@ state, etc.) as needed.
   AGENTS.md N7; rv's unprefixed tables are grandfathered.
 - `install.sh` — Docker build + per-project Liquibase + restart
 - `docs/SETUP.md` — first-time VM walkthrough
+- `docs/SHARED_AUTH.md` — how ANY website integrates the shared
+  login/roles/invite system. Read it before touching auth anywhere.
 
 ## Adding a new project (the playbook)
 
