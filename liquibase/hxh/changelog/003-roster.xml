@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        Character roster database (admin-curated; browsed at
+        /hxh/roster.html). Design notes:
+          - nen_types / weapons / arcs are comma-separated slug strings
+            in one column (Andrew's simplicity preference over junction
+            tables). arcs values soft-reference hxh_arcs.slug.
+          - images is JSONB (array of URL strings) — URLs are the one
+            list here that's risky to join on commas.
+        Character DATA rows are pushed via the admin-gated
+        PUT /api/hxh/roster/characters endpoint, not via Liquibase —
+        only schema and the small fixed arc list live here.
+    -->
+
+    <changeSet id="003-roster" author="hxh-server">
+
+        <createTable tableName="hxh_arcs">
+            <column name="slug" type="VARCHAR(50)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="name" type="VARCHAR(100)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="sort_order" type="INT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <createTable tableName="hxh_characters">
+            <column name="slug" type="VARCHAR(50)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="name" type="VARCHAR(100)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="description" type="TEXT" defaultValue="">
+                <constraints nullable="false"/>
+            </column>
+            <column name="nen_types" type="VARCHAR(120)" defaultValue="">
+                <constraints nullable="false"/>
+            </column>
+            <column name="weapons" type="TEXT" defaultValue="">
+                <constraints nullable="false"/>
+            </column>
+            <column name="arcs" type="TEXT" defaultValue="">
+                <constraints nullable="false"/>
+            </column>
+            <column name="images" type="JSONB" defaultValue="[]">
+                <constraints nullable="false"/>
+            </column>
+            <column name="sort_order" type="INT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <insert tableName="hxh_arcs">
+            <column name="slug" value="hunter-exam"/>
+            <column name="name" value="Hunter Exam"/>
+            <column name="sort_order" valueNumeric="1"/>
+        </insert>
+        <insert tableName="hxh_arcs">
+            <column name="slug" value="zoldyck-family"/>
+            <column name="name" value="Zoldyck Family"/>
+            <column name="sort_order" valueNumeric="2"/>
+        </insert>
+        <insert tableName="hxh_arcs">
+            <column name="slug" value="heavens-arena"/>
+            <column name="name" value="Heavens Arena"/>
+            <column name="sort_order" valueNumeric="3"/>
+        </insert>
+        <insert tableName="hxh_arcs">
+            <column name="slug" value="yorknew-city"/>
+            <column name="name" value="Yorknew City"/>
+            <column name="sort_order" valueNumeric="4"/>
+        </insert>
+        <insert tableName="hxh_arcs">
+            <column name="slug" value="greed-island"/>
+            <column name="name" value="Greed Island"/>
+            <column name="sort_order" valueNumeric="5"/>
+        </insert>
+        <insert tableName="hxh_arcs">
+            <column name="slug" value="chimera-ant"/>
+            <column name="name" value="Chimera Ant"/>
+            <column name="sort_order" valueNumeric="6"/>
+        </insert>
+        <insert tableName="hxh_arcs">
+            <column name="slug" value="chairman-election"/>
+            <column name="name" value="13th Chairman Election"/>
+            <column name="sort_order" valueNumeric="7"/>
+        </insert>
+
+    </changeSet>
+
+</databaseChangeLog>

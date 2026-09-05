@@ -82,6 +82,16 @@ the shared auth service — one `hobby_server_user` table, per-website
 roles, one SSO session store (`internal/shared/`). That is its job;
 the rule above still applies to every other project's data.
 
+### N7 — Table names carry the project prefix
+
+STANDARD (2026-09, per Andrew): every project-specific table is named
+`<project>_<thing>` (`hxh_characters`, `hxh_arcs`, ...), even when the
+project has its own database. The shared auth tables use the
+`hobby_server_` prefix. **Grandfathered:** rv's legacy unprefixed
+tables (`user`, `session`, `prep_item`, `itinerary_override`,
+`dunkin_log`, ...) stay as-is for now — clean up in some future
+migration, don't imitate. New tables in ANY project: prefixed.
+
 ---
 
 ## 1. Adding a new endpoint (to an existing project)

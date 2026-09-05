@@ -58,7 +58,9 @@ state, etc.) as needed.
 - `cmd/add-user/main.go` — `--project <name> <user> <pass>` upsert
 - `internal/auth/auth.go` — sessions + bcrypt
 - `liquibase/<project>/changelog/` — per-project schema (one dir per
-  project, never edit landed changesets)
+  project, never edit landed changesets). Table names carry the
+  project prefix (`hxh_characters`, not `characters`) — see
+  AGENTS.md N7; rv's unprefixed tables are grandfathered.
 - `install.sh` — Docker build + per-project Liquibase + restart
 - `docs/SETUP.md` — first-time VM walkthrough
 

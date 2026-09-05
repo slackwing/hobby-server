@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        Adopt the hxh_ table-name prefix standard (project-specific
+        tables are prefixed <project>_; see AGENTS.md N7). The 001
+        user/session tables were the generic per-project auth floor —
+        never used (hxh logs in via the SHARED auth system, the
+        `admin` project) — so this is a rename of empty tables. hxh no
+        longer mounts the generic auth floor in cmd/server/main.go.
+    -->
+
+    <changeSet id="002-hxh-prefix" author="hxh-server">
+        <renameTable oldTableName="user" newTableName="hxh_user"/>
+        <renameTable oldTableName="session" newTableName="hxh_session"/>
+    </changeSet>
+
+</databaseChangeLog>

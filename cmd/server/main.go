@@ -39,6 +39,7 @@ import (
 	"github.com/slackwing/hobby-server/internal/auth"
 	"github.com/slackwing/hobby-server/internal/config"
 	"github.com/slackwing/hobby-server/internal/database"
+	"github.com/slackwing/hobby-server/internal/hxh"
 	"github.com/slackwing/hobby-server/internal/prep"
 	"github.com/slackwing/hobby-server/internal/rvedit"
 	"github.com/slackwing/hobby-server/internal/shared"
@@ -78,6 +79,8 @@ func main() {
 	// cookie at Path=/) instead of the per-project user/session floor.
 	var adminProject *config.Project
 	var adminStore *shared.Store
+	var hxhProject *config.Project
+	var hxhPool *pgxpool.Pool
 
 	states := make([]projectState, 0, len(cfg.Projects))
 	for _, p := range cfg.Projects {
@@ -92,6 +95,17 @@ func main() {
 			adminStore = shared.NewStore(pool)
 			log.Printf("project %q ready (shared auth): db=%s url_prefix=%s cookie=%s cookie_path=%s",
 				p.Name, p.Database.Name, p.URLPrefix, shared.CookieName, p.CookiePath)
+			continue
+		}
+		// hxh doesn't use the per-project auth floor (its user/session
+		// tables were renamed hxh_* and sit unused) — it mounts roster
+		// endpoints gated by the shared auth system instead, below.
+		if p.Name == "hxh" {
+			p := p
+			hxhProject = &p
+			hxhPool = pool
+			log.Printf("project %q ready (data only): db=%s url_prefix=%s auth=shared",
+				p.Name, p.Database.Name, p.URLPrefix)
 			continue
 		}
 		states = append(states, projectState{
@@ -180,6 +194,17 @@ func main() {
 		r.Route(adminProject.URLPrefix, func(sub chi.Router) {
 			shared.Mount(sub, adminStore, adminProject.CookiePath, secureCookies)
 		})
+	}
+
+	if hxhProject != nil {
+		if adminStore == nil {
+			log.Printf("project %q: shared auth (admin project) not configured; hxh endpoints NOT mounted", hxhProject.Name)
+		} else {
+			hxhStore := hxh.NewStore(hxhPool)
+			r.Route(hxhProject.URLPrefix, func(sub chi.Router) {
+				hxh.Mount(sub, hxhStore, adminStore)
+			})
+		}
 	}
 
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
