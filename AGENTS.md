@@ -64,6 +64,9 @@ will break the frontend. Each project has paired repos:
   project (config + `liquibase/rv/`)
 - **hxh**: feathers' `foundry/website/html/hxh/` ↔ this repo's `hxh`
   project (config + `liquibase/hxh/`)
+- **admin**: feathers' `foundry/website/html/admin/` (console +
+  reset page) and each site's `invite.html` ↔ this repo's
+  `internal/shared/` + `liquibase/admin/`
 
 Check both before changing the wire format.
 
@@ -73,6 +76,11 @@ Per design: each project's data lives in its own database. Don't add
 queries that join across project DBs, don't add a shared "all users"
 table, don't share session stores. If two projects need to share
 something, it gets its own service.
+
+**Deliberate exception (2026-09, per Andrew):** the `admin` project IS
+the shared auth service — one `hobby_server_user` table, per-website
+roles, one SSO session store (`internal/shared/`). That is its job;
+the rule above still applies to every other project's data.
 
 ---
 

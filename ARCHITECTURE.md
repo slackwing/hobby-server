@@ -32,6 +32,11 @@ plugs in by adding a config entry + a changelog dir.
   [Hunter × Halloween party site](https://andrewcheong.com/hxh).
   Frontend in `slackwing/feathers`:
   `foundry/website/html/hxh/`.
+- **admin** — shared cross-website auth (`internal/shared/`; SSO
+  cookie `hobby_session` at Path=/, per-website roles, invite/reset
+  links). Special-cased in `cmd/server/main.go`; tables prefixed
+  `hobby_server_*` in the shared DB. Frontend console:
+  `foundry/website/html/admin/`.
 
 When adding a new project, update the "Currently hosted projects" list
 in this file and in `README.md`.

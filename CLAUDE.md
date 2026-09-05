@@ -17,12 +17,24 @@ schema-related here, look at how manuscript-studio does it.
   [`slackwing/feathers`](https://github.com/slackwing/feathers) at
   `foundry/website/html/rv/` (locally:
   `~/src/feathers/foundry/website/html/rv/`).
-- **hxh** — auth for the
+- **hxh** — the
   [Hunter × Halloween party site](https://andrewcheong.com/hxh).
   Frontend: same feathers repo at `foundry/website/html/hxh/`.
   Own database (`hxh`) — unlike rv it does NOT live in the shared
   `hobby_server` DB, since every project's auth tables share the
-  same `user`/`session` names.
+  same `user`/`session` names. NOTE: hxh's per-project auth floor is
+  unused — the site logs in via the shared **admin** system below;
+  the `hxh` DB is reserved for future party data tables.
+- **admin** — the SHARED cross-website auth system
+  (`internal/shared/`, console at
+  [andrewcheong.com/admin](https://andrewcheong.com/admin)). One
+  account per person (`hobby_server_user`), per-website roles
+  (`hobby_server_user_roles`), domain-wide SSO cookie
+  (`hobby_session`, Path=/), one-time invite/reset links. Tables live
+  in the shared `hobby_server` DB (`hobby_server_*` prefix, schema in
+  `liquibase/admin/`). This project is special-cased in
+  `cmd/server/main.go` — it does NOT get the generic per-project auth
+  floor. rv does not use it (yet; may migrate one day).
 
 (Keep this list in sync with the one in `README.md` and
 `ARCHITECTURE.md`.)
