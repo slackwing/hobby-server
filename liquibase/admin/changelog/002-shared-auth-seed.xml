@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        Seed data: the three current websites, their available roles,
+        and the first account (andrew, password unset — must be set via
+        a reset link before first login). rv has no roles here because
+        rv doesn't use the shared auth system (yet).
+    -->
+
+    <changeSet id="002-shared-auth-seed" author="admin">
+
+        <insert tableName="hobby_server_websites">
+            <column name="website" value="rv"/>
+        </insert>
+        <insert tableName="hobby_server_websites">
+            <column name="website" value="admin"/>
+        </insert>
+        <insert tableName="hobby_server_websites">
+            <column name="website" value="hxh"/>
+        </insert>
+
+        <insert tableName="hobby_server_website_roles">
+            <column name="website" value="admin"/>
+            <column name="role" value="admin"/>
+        </insert>
+        <insert tableName="hobby_server_website_roles">
+            <column name="website" value="hxh"/>
+            <column name="role" value="admin"/>
+        </insert>
+        <insert tableName="hobby_server_website_roles">
+            <column name="website" value="hxh"/>
+            <column name="role" value="guest"/>
+        </insert>
+
+        <insert tableName="hobby_server_user">
+            <column name="username" value="andrew"/>
+            <column name="display_name" value="Andrew C"/>
+        </insert>
+
+        <insert tableName="hobby_server_user_roles">
+            <column name="username" value="andrew"/>
+            <column name="website" value="admin"/>
+            <column name="role" value="admin"/>
+        </insert>
+        <insert tableName="hobby_server_user_roles">
+            <column name="username" value="andrew"/>
+            <column name="website" value="hxh"/>
+            <column name="role" value="admin"/>
+        </insert>
+
+    </changeSet>
+
+</databaseChangeLog>

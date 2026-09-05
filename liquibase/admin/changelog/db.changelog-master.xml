@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        Shared cross-website auth system ("admin" project). These tables
+        live in the SHARED hobby_server database (same DB as rv's tables,
+        hence the hobby_server_ prefix on every table name). rv's own
+        changelog (liquibase/rv/) also runs against this DB — changeset
+        filenames here are deliberately distinct from rv's so the two
+        changelogs coexist in one DATABASECHANGELOG table.
+
+        All schema changes are added as new changesets (003+). NEVER edit
+        a landed changeset; create a new file instead.
+    -->
+    <include file="changelog/001-shared-auth-schema.xml"/>
+    <include file="changelog/002-shared-auth-seed.xml"/>
+
+</databaseChangeLog>

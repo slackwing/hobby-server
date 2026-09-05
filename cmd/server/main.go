@@ -41,6 +41,7 @@ import (
 	"github.com/slackwing/hobby-server/internal/database"
 	"github.com/slackwing/hobby-server/internal/prep"
 	"github.com/slackwing/hobby-server/internal/rvedit"
+	"github.com/slackwing/hobby-server/internal/shared"
 )
 
 // secureCookies is set once at startup based on cfg.Server.Env.
@@ -72,6 +73,12 @@ func main() {
 		store      *auth.SessionStore
 		cookieName string
 	}
+	// The "admin" project is special: it hosts the SHARED auth system
+	// (internal/shared — one account works across all websites, SSO
+	// cookie at Path=/) instead of the per-project user/session floor.
+	var adminProject *config.Project
+	var adminStore *shared.Store
+
 	states := make([]projectState, 0, len(cfg.Projects))
 	for _, p := range cfg.Projects {
 		pool, err := database.NewPool(ctx, p.PostgresDSN())
@@ -79,6 +86,14 @@ func main() {
 			log.Fatalf("project %s: connect db: %v", p.Name, err)
 		}
 		defer pool.Close()
+		if p.Name == "admin" {
+			p := p
+			adminProject = &p
+			adminStore = shared.NewStore(pool)
+			log.Printf("project %q ready (shared auth): db=%s url_prefix=%s cookie=%s cookie_path=%s",
+				p.Name, p.Database.Name, p.URLPrefix, shared.CookieName, p.CookiePath)
+			continue
+		}
 		states = append(states, projectState{
 			project:    p,
 			pool:       pool,
@@ -158,6 +173,12 @@ func main() {
 				sub.Get("/draw/strokes", rvedit.HandleListDrawStrokes(rvStore))
 				sub.Post("/draw/strokes", rvedit.HandleCreateDrawStroke(rvStore))
 			}
+		})
+	}
+
+	if adminProject != nil {
+		r.Route(adminProject.URLPrefix, func(sub chi.Router) {
+			shared.Mount(sub, adminStore, adminProject.CookiePath, secureCookies)
 		})
 	}
 

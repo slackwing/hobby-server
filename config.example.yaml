@@ -50,6 +50,23 @@ projects:
     url_prefix: "/api/hxh"
     cookie_path: "/hxh/"
 
+  # SPECIAL: the "admin" project hosts the shared cross-website auth
+  # system (internal/shared). Its database must be the shared
+  # hobby_server DB (where the hobby_server_* tables live) and its
+  # cookie_path must be "/" — the hobby_session SSO cookie spans the
+  # whole domain.
+  - name: admin
+    database:
+      host: "127.0.0.1"        # Cloud SQL Auth Proxy
+      port: 5432
+      name: "hobby_server"
+      user: "hobby_server"
+      password: "REPLACE_ME"
+    # Public path is andrewcheong.com/admin/api/* ; Apache proxies that
+    # to 127.0.0.1:5002/api/admin/* .
+    url_prefix: "/api/admin"
+    cookie_path: "/"
+
   # Add additional projects here:
   #
   # - name: next_thing

@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        Shared auth across all websites on andrewcheong.com. One account
+        per person; per-website access via role rows. Independent of
+        rv's legacy per-project user/session tables (those may migrate
+        into this system one day).
+
+          - hobby_server_user: accounts. password_hash is argon2id (PHC
+            string) and NULLABLE — a user with NULL hash cannot log in
+            until they set a password via an invite/reset link.
+          - hobby_server_websites: registry of sites (sources dropdowns).
+          - hobby_server_website_roles: which roles exist per website.
+          - hobby_server_user_roles: (user, website, role) grants.
+          - hobby_server_session: SSO sessions (hobby_session cookie,
+            Path=/), sliding 30-day TTL.
+          - hobby_server_password_token: invite/reset codes. Stores only
+            the SHA-256 of the code — a DB leak yields no usable links.
+            website records which site's invite skin the link uses
+            ("admin" for plain resets). One-time use via used_at.
+    -->
+
+    <changeSet id="001-shared-auth-schema" author="admin">
+
+        <createTable tableName="hobby_server_user">
+            <column name="username" type="VARCHAR(50)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="display_name" type="VARCHAR(100)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="password_hash" type="VARCHAR(255)"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <createTable tableName="hobby_server_websites">
+            <column name="website" type="VARCHAR(50)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+        </createTable>
+
+        <createTable tableName="hobby_server_website_roles">
+            <column name="website" type="VARCHAR(50)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="role" type="VARCHAR(50)">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <addPrimaryKey tableName="hobby_server_website_roles"
+            columnNames="website, role" constraintName="pk_hs_website_roles"/>
+        <addForeignKeyConstraint
+            constraintName="fk_hs_website_roles_website"
+            baseTableName="hobby_server_website_roles" baseColumnNames="website"
+            referencedTableName="hobby_server_websites" referencedColumnNames="website"
+            onDelete="CASCADE"/>
+
+        <createTable tableName="hobby_server_user_roles">
+            <column name="username" type="VARCHAR(50)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="website" type="VARCHAR(50)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="role" type="VARCHAR(50)">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <addPrimaryKey tableName="hobby_server_user_roles"
+            columnNames="username, website, role" constraintName="pk_hs_user_roles"/>
+        <addForeignKeyConstraint
+            constraintName="fk_hs_user_roles_user"
+            baseTableName="hobby_server_user_roles" baseColumnNames="username"
+            referencedTableName="hobby_server_user" referencedColumnNames="username"
+            onDelete="CASCADE"/>
+        <addForeignKeyConstraint
+            constraintName="fk_hs_user_roles_website_role"
+            baseTableName="hobby_server_user_roles" baseColumnNames="website, role"
+            referencedTableName="hobby_server_website_roles" referencedColumnNames="website, role"
+            onDelete="CASCADE"/>
+
+        <createTable tableName="hobby_server_session">
+            <column name="id" type="VARCHAR(64)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="username" type="VARCHAR(50)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+            <column name="expires_at" type="TIMESTAMPTZ">
+                <constraints nullable="false"/>
+            </column>
+            <column name="last_activity_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <createIndex tableName="hobby_server_session" indexName="idx_hs_session_expires_at">
+            <column name="expires_at"/>
+        </createIndex>
+        <createIndex tableName="hobby_server_session" indexName="idx_hs_session_username">
+            <column name="username"/>
+        </createIndex>
+        <addForeignKeyConstraint
+            constraintName="fk_hs_session_user"
+            baseTableName="hobby_server_session" baseColumnNames="username"
+            referencedTableName="hobby_server_user" referencedColumnNames="username"
+            onDelete="CASCADE"/>
+
+        <createTable tableName="hobby_server_password_token">
+            <column name="token_hash" type="VARCHAR(64)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="username" type="VARCHAR(50)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="website" type="VARCHAR(50)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+            <column name="expires_at" type="TIMESTAMPTZ">
+                <constraints nullable="false"/>
+            </column>
+            <column name="used_at" type="TIMESTAMPTZ"/>
+        </createTable>
+        <createIndex tableName="hobby_server_password_token" indexName="idx_hs_password_token_username">
+            <column name="username"/>
+        </createIndex>
+        <addForeignKeyConstraint
+            constraintName="fk_hs_password_token_user"
+            baseTableName="hobby_server_password_token" baseColumnNames="username"
+            referencedTableName="hobby_server_user" referencedColumnNames="username"
+            onDelete="CASCADE"/>
+
+    </changeSet>
+
+</databaseChangeLog>
