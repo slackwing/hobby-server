@@ -32,6 +32,11 @@ plugs in by adding a config entry + a changelog dir.
   [Hunter × Halloween party site](https://andrewcheong.com/hxh).
   Frontend in `slackwing/feathers`:
   `foundry/website/html/hxh/`.
+- **bap** — cup state for the
+  [bongo-cat table-bap site](https://andrewcheong.com/bap).
+  Frontend in `slackwing/feathers`: `foundry/website/html/bap/`.
+  Uses the shared auth system (like hxh, no per-project floor);
+  endpoints in `internal/bap/`.
 - **admin** — shared cross-website auth (`internal/shared/`; SSO
   cookie `hobby_session` at Path=/, per-website roles, invite/reset
   links). Special-cased in `cmd/server/main.go`; tables prefixed

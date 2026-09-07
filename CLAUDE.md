@@ -25,6 +25,13 @@ schema-related here, look at how manuscript-studio does it.
   same `user`/`session` names. NOTE: hxh's per-project auth floor is
   unused — the site logs in via the shared **admin** system below;
   the `hxh` DB is reserved for future party data tables.
+- **bap** — the
+  [bongo-cat table-bap site](https://andrewcheong.com/bap).
+  Frontend: same feathers repo at `foundry/website/html/bap/`.
+  Own database (`bap`), one table (`bap_cup_state`). Like hxh it has
+  no per-project auth floor — endpoints (`internal/bap/`) are gated
+  by the shared **admin** system; any logged-in user reads/writes
+  their own cup state.
 - **admin** — the SHARED cross-website auth system
   (`internal/shared/`, console at
   [andrewcheong.com/admin](https://andrewcheong.com/admin)). One

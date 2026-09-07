@@ -37,6 +37,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/slackwing/hobby-server/internal/auth"
+	"github.com/slackwing/hobby-server/internal/bap"
 	"github.com/slackwing/hobby-server/internal/config"
 	"github.com/slackwing/hobby-server/internal/database"
 	"github.com/slackwing/hobby-server/internal/hxh"
@@ -81,6 +82,8 @@ func main() {
 	var adminStore *shared.Store
 	var hxhProject *config.Project
 	var hxhPool *pgxpool.Pool
+	var bapProject *config.Project
+	var bapPool *pgxpool.Pool
 
 	states := make([]projectState, 0, len(cfg.Projects))
 	for _, p := range cfg.Projects {
@@ -104,6 +107,16 @@ func main() {
 			p := p
 			hxhProject = &p
 			hxhPool = pool
+			log.Printf("project %q ready (data only): db=%s url_prefix=%s auth=shared",
+				p.Name, p.Database.Name, p.URLPrefix)
+			continue
+		}
+		// bap, like hxh, has no per-project auth floor — its cup-state
+		// endpoints are gated by the shared auth system, mounted below.
+		if p.Name == "bap" {
+			p := p
+			bapProject = &p
+			bapPool = pool
 			log.Printf("project %q ready (data only): db=%s url_prefix=%s auth=shared",
 				p.Name, p.Database.Name, p.URLPrefix)
 			continue
@@ -211,6 +224,17 @@ func main() {
 			hxhStore := hxh.NewStore(hxhPool)
 			r.Route(hxhProject.URLPrefix, func(sub chi.Router) {
 				hxh.Mount(sub, hxhStore, adminStore)
+			})
+		}
+	}
+
+	if bapProject != nil {
+		if adminStore == nil {
+			log.Printf("project %q: shared auth (admin project) not configured; bap endpoints NOT mounted", bapProject.Name)
+		} else {
+			bapStore := bap.NewStore(bapPool)
+			r.Route(bapProject.URLPrefix, func(sub chi.Router) {
+				bap.Mount(sub, bapStore, adminStore)
 			})
 		}
 	}

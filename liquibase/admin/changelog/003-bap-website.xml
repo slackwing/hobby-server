@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        Register the bap website (bongo-cat table-bap site at /bap/)
+        in the shared auth system: andrew administers it; tampopo is
+        a test player (password unset — set via invite link).
+    -->
+
+    <changeSet id="003-bap-website" author="admin">
+
+        <insert tableName="hobby_server_websites">
+            <column name="website" value="bap"/>
+        </insert>
+
+        <insert tableName="hobby_server_website_roles">
+            <column name="website" value="bap"/>
+            <column name="role" value="admin"/>
+        </insert>
+        <insert tableName="hobby_server_website_roles">
+            <column name="website" value="bap"/>
+            <column name="role" value="player"/>
+        </insert>
+
+        <insert tableName="hobby_server_user_roles">
+            <column name="username" value="andrew"/>
+            <column name="website" value="bap"/>
+            <column name="role" value="admin"/>
+        </insert>
+
+        <insert tableName="hobby_server_user">
+            <column name="username" value="tampopo"/>
+            <column name="display_name" value="Tampopo"/>
+        </insert>
+        <insert tableName="hobby_server_user_roles">
+            <column name="username" value="tampopo"/>
+            <column name="website" value="bap"/>
+            <column name="role" value="player"/>
+        </insert>
+
+    </changeSet>
+
+</databaseChangeLog>

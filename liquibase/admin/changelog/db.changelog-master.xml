@@ -18,5 +18,6 @@
     -->
     <include file="changelog/001-shared-auth-schema.xml"/>
     <include file="changelog/002-shared-auth-seed.xml"/>
+    <include file="changelog/003-bap-website.xml"/>
 
 </databaseChangeLog>

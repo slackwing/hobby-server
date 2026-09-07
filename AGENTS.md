@@ -64,6 +64,8 @@ will break the frontend. Each project has paired repos:
   project (config + `liquibase/rv/`)
 - **hxh**: feathers' `foundry/website/html/hxh/` ↔ this repo's `hxh`
   project (config + `liquibase/hxh/`)
+- **bap**: feathers' `foundry/website/html/bap/` ↔ this repo's `bap`
+  project (`internal/bap/` + `liquibase/bap/`)
 - **admin**: feathers' `foundry/website/html/admin/` (console +
   reset page) and each site's `invite.html` ↔ this repo's
   `internal/shared/` + `liquibase/admin/`

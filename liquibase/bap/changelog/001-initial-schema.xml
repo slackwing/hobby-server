@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        Per-user cup state. bap uses the SHARED auth system (no
+        per-project user/session tables); username soft-references
+        hobby_server_user.username in the hobby_server DB.
+          - cup_x: cup position as a fraction of the table span
+            (0 = home position, 1 = right edge). Resolution-independent
+            so the client can render at any zoom.
+          - broken: the cup is currently shattered (an event will hook
+            onto this later); shatters counts lifetime breaks.
+    -->
+
+    <changeSet id="001-initial-schema" author="bap-server">
+
+        <createTable tableName="bap_cup_state">
+            <column name="username" type="VARCHAR(50)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="cup_x" type="DOUBLE PRECISION" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="baps" type="INT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="broken" type="BOOLEAN" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+            <column name="shatters" type="INT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+    </changeSet>
+
+</databaseChangeLog>

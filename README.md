@@ -27,6 +27,11 @@ discipline, Cloud SQL via the Cloud SQL Auth Proxy.
   [Hunter × Halloween party site](https://github.com/slackwing/feathers/tree/master/foundry/website/html/hxh).
   Database: `hxh`. URL prefix: `/api/hxh` (Apache rewrites public
   `/hxh/api/*` to this). Cookie path: `/hxh/`.
+- **bap** — data for the
+  [bongo-cat table-bap site](https://github.com/slackwing/feathers/tree/master/foundry/website/html/bap).
+  Database: `bap`. URL prefix: `/api/bap` (Apache rewrites public
+  `/bap/api/*` to this). Auth via the shared system (no per-project
+  floor); see `internal/bap/`.
 - **admin** — shared cross-website auth system (one account, roles per
   website, SSO cookie `hobby_session` at Path=/, invite/reset links).
   Database: shared `hobby_server` (tables prefixed `hobby_server_*`).

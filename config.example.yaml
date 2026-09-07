@@ -50,6 +50,19 @@ projects:
     url_prefix: "/api/hxh"
     cookie_path: "/hxh/"
 
+  - name: bap
+    database:
+      host: "127.0.0.1"        # Cloud SQL Auth Proxy
+      port: 5432
+      name: "bap"
+      user: "bap_user"
+      password: "REPLACE_ME"
+    # Public path is andrewcheong.com/bap/api/* ; Apache proxies that to
+    # 127.0.0.1:5002/api/bap/* . Auth is the shared system (no
+    # per-project login floor).
+    url_prefix: "/api/bap"
+    cookie_path: "/bap/"
+
   # SPECIAL: the "admin" project hosts the shared cross-website auth
   # system (internal/shared). Its database must be the shared
   # hobby_server DB (where the hobby_server_* tables live) and its
