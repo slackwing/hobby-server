@@ -32,6 +32,23 @@ type CupState struct {
 	Baps     int     `json:"baps"`
 	Broken   bool    `json:"broken"`
 	Shatters int     `json:"shatters"`
+	// Burst names the break effect the client rolled for this cup
+	// ("glass", "hearts", "picks"). Transient — used only to pick the
+	// notification's exception name, never stored.
+	Burst string `json:"burst,omitempty"`
+}
+
+// exceptionFor maps a burst kind to the fake exception in the alert.
+func exceptionFor(burst string) string {
+	switch burst {
+	case "hearts":
+		return "HeartBurstException"
+	case "picks":
+		return "GuitarPickException"
+	case "glass":
+		return "GlassShatterException"
+	}
+	return "CupShatterException"
 }
 
 type Store struct {
@@ -95,12 +112,14 @@ type Notifier struct {
 
 // Notify fires the Telegram message in the calling goroutine; run it
 // with `go`. The bot token must never reach the logs (AGENTS.md N4) —
-// errors are logged with the token redacted.
-func (n Notifier) Notify(username string, shatters int) {
+// errors are logged with the token redacted. The message format is
+// exactly as Andrew specified (pager parody).
+func (n Notifier) Notify(baps int, exception string) {
 	if n.BotToken == "" || n.ChatID == "" {
 		return
 	}
-	msg := fmt.Sprintf("💥 %s knocked the cup off the table (break #%d)", username, shatters)
+	msg := fmt.Sprintf("ALRT #%06d on Ads API BAP Service: %s: null. Reply 4: Ack, 6: Resolv",
+		baps, exception)
 	body := url.Values{"chat_id": {n.ChatID}, "text": {msg}}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -183,7 +202,7 @@ func handlePutState(store *Store, notify Notifier) http.HandlerFunc {
 			return
 		}
 		if st.Broken && !wasBroken {
-			go notify.Notify(username, st.Shatters)
+			go notify.Notify(st.Baps, exceptionFor(st.Burst))
 		}
 		writeJSON(w, http.StatusOK, st)
 	}
