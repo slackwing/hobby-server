@@ -203,7 +203,12 @@ func handlePutState(store *Store, notify Notifier) http.HandlerFunc {
 			return
 		}
 		if st.Broken && !wasBroken {
-			go notify.Notify(st.Baps, exceptionFor(st.Burst))
+			// e.g. NullPointerException(B)[an] — first two letters of the user
+			tag := username
+			if len(tag) > 2 {
+				tag = tag[:2]
+			}
+			go notify.Notify(st.Baps, exceptionFor(st.Burst)+"["+tag+"]")
 		}
 		writeJSON(w, http.StatusOK, st)
 	}
