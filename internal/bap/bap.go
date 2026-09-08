@@ -38,17 +38,18 @@ type CupState struct {
 	Burst string `json:"burst,omitempty"`
 }
 
-// exceptionFor maps a burst kind to the fake exception in the alert.
+// exceptionFor maps a burst kind to the fake exception in the alert
+// (names per Andrew: blue/pink/green cups).
 func exceptionFor(burst string) string {
 	switch burst {
 	case "hearts":
-		return "HeartBurstException"
+		return "SupportQueueEvent(R)"
 	case "picks":
-		return "GuitarPickException"
+		return "UnknownException(G)"
 	case "glass":
-		return "GlassShatterException"
+		return "NullPointerException(B)"
 	}
-	return "CupShatterException"
+	return "UnknownException(?)"
 }
 
 type Store struct {
