@@ -34,7 +34,8 @@ Public:
   consumes code, logs the user in (returns the me-payload)
 
 Admin-only (requires role `admin` on website `admin`):
-- `GET/POST /admin/api/users`, `PATCH /admin/api/users/{username}`
+- `GET/POST /admin/api/users`, `PATCH/DELETE /admin/api/users/{username}`
+  (DELETE cascades roles, sessions, and pending links; self-delete refused)
 - `GET /admin/api/websites`
 - `POST/DELETE /admin/api/roles` `{username, website, role}`
 - `POST /admin/api/links` `{username, type: "reset"}` or

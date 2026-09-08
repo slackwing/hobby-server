@@ -31,6 +31,7 @@ func Mount(r chi.Router, store *Store, cookiePath string, secure bool) {
 		g.Get("/users", handleListUsers(store))
 		g.Post("/users", handleCreateUser(store))
 		g.Patch("/users/{username}", handlePatchUser(store))
+		g.Delete("/users/{username}", handleDeleteUser(store))
 		g.Get("/websites", handleListWebsites(store))
 		g.Post("/roles", handleAddRole(store))
 		g.Delete("/roles", handleRemoveRole(store))
@@ -327,6 +328,29 @@ func handlePatchUser(store *Store) http.HandlerFunc {
 		found, err := store.UpdateDisplayName(username, req.DisplayName)
 		if err != nil {
 			log.Printf("[admin] patch user error: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if !found {
+			http.Error(w, "no such user", http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func handleDeleteUser(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		username := chi.URLParam(r, "username")
+		// Roles, sessions, and tokens cascade — deleting yourself would
+		// end your own session mid-request, so refuse it.
+		if self, _ := sessionUser(store, r); self == username {
+			http.Error(w, "cannot delete your own account", http.StatusBadRequest)
+			return
+		}
+		found, err := store.DeleteUser(username)
+		if err != nil {
+			log.Printf("[admin] delete user error: %v", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}

@@ -149,6 +149,17 @@ func (s *Store) CreateUser(username, displayName string) error {
 	return err
 }
 
+// DeleteUser removes an account; roles, sessions, and password tokens
+// cascade (FKs in 001-shared-auth-schema.xml).
+func (s *Store) DeleteUser(username string) (bool, error) {
+	ctx, cancel := withCtx()
+	defer cancel()
+	tag, err := s.pool.Exec(ctx, `
+		DELETE FROM hobby_server_user WHERE username = $1
+	`, username)
+	return tag.RowsAffected() > 0, err
+}
+
 func (s *Store) UpdateDisplayName(username, displayName string) (bool, error) {
 	ctx, cancel := withCtx()
 	defer cancel()
