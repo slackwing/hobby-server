@@ -233,8 +233,12 @@ func main() {
 			log.Printf("project %q: shared auth (admin project) not configured; bap endpoints NOT mounted", bapProject.Name)
 		} else {
 			bapStore := bap.NewStore(bapPool)
+			notify := bap.Notifier{
+				BotToken: bapProject.Telegram.BotToken,
+				ChatID:   bapProject.Telegram.ChatID,
+			}
 			r.Route(bapProject.URLPrefix, func(sub chi.Router) {
-				bap.Mount(sub, bapStore, adminStore)
+				bap.Mount(sub, bapStore, adminStore, notify)
 			})
 		}
 	}

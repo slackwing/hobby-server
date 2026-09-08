@@ -62,6 +62,10 @@ projects:
     # per-project login floor).
     url_prefix: "/api/bap"
     cookie_path: "/bap/"
+    # Optional: Telegram message when a cup shatters. Omit to disable.
+    # telegram:
+    #   bot_token: "REPLACE_ME"
+    #   chat_id: "REPLACE_ME"
 
   # SPECIAL: the "admin" project hosts the shared cross-website auth
   # system (internal/shared). Its database must be the shared

@@ -21,6 +21,14 @@ type Database struct {
 	Password string `yaml:"password"`
 }
 
+// Telegram holds optional bot-notification settings for a project
+// (used by bap: a message is sent when a user's cup shatters). Both
+// fields empty = notifications disabled.
+type Telegram struct {
+	BotToken string `yaml:"bot_token"`
+	ChatID   string `yaml:"chat_id"`
+}
+
 type Project struct {
 	// Name is the short id used everywhere (URL fragment, cookie name
 	// prefix, liquibase subdir name, log lines). Must match
@@ -40,6 +48,9 @@ type Project struct {
 	// Example: "/rv/" — scopes the cookie so /rv/ logins don't bleed
 	// into /next/.
 	CookiePath string `yaml:"cookie_path"`
+
+	// Telegram is optional; see the Telegram type.
+	Telegram Telegram `yaml:"telegram"`
 }
 
 type Server struct {

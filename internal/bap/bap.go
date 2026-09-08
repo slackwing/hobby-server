@@ -10,8 +10,11 @@ package bap
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -58,10 +61,14 @@ func (s *Store) GetState(username string) (CupState, error) {
 	return st, err
 }
 
-func (s *Store) PutState(username string, st CupState) error {
+// PutState upserts the user's cup and reports whether the cup was
+// already broken beforehand (so callers can detect the moment of
+// shattering: st.Broken && !wasBroken).
+func (s *Store) PutState(username string, st CupState) (wasBroken bool, err error) {
 	ctx, cancel := withCtx()
 	defer cancel()
-	_, err := s.pool.Exec(ctx, `
+	err = s.pool.QueryRow(ctx, `
+		WITH old AS (SELECT broken FROM bap_cup_state WHERE username = $1)
 		INSERT INTO bap_cup_state (username, cup_x, baps, broken, shatters, updated_at)
 		VALUES ($1, $2, $3, $4, $5, NOW())
 		ON CONFLICT (username) DO UPDATE SET
@@ -70,21 +77,59 @@ func (s *Store) PutState(username string, st CupState) error {
 			broken = EXCLUDED.broken,
 			shatters = EXCLUDED.shatters,
 			updated_at = NOW()
-	`, username, st.CupX, st.Baps, st.Broken, st.Shatters)
-	return err
+		RETURNING COALESCE((SELECT broken FROM old), false)
+	`, username, st.CupX, st.Baps, st.Broken, st.Shatters).Scan(&wasBroken)
+	return wasBroken, err
 }
 
 type ctxKey int
 
 const userKey ctxKey = 0
 
+// Notifier sends the cup-shattered Telegram message. Zero-valued =
+// notifications disabled.
+type Notifier struct {
+	BotToken string
+	ChatID   string
+}
+
+// Notify fires the Telegram message in the calling goroutine; run it
+// with `go`. The bot token must never reach the logs (AGENTS.md N4) —
+// errors are logged with the token redacted.
+func (n Notifier) Notify(username string, shatters int) {
+	if n.BotToken == "" || n.ChatID == "" {
+		return
+	}
+	msg := fmt.Sprintf("💥 %s knocked the cup off the table (break #%d)", username, shatters)
+	body := url.Values{"chat_id": {n.ChatID}, "text": {msg}}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		"https://api.telegram.org/bot"+n.BotToken+"/sendMessage",
+		strings.NewReader(body.Encode()))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("[bap] telegram notify error: %s",
+			strings.ReplaceAll(err.Error(), n.BotToken, "<token>"))
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("[bap] telegram notify: status %d", resp.StatusCode)
+	}
+}
+
 // Mount wires the bap endpoints. All routes require a valid shared
 // session; state is keyed to the session's user.
-func Mount(r chi.Router, store *Store, auth *shared.Store) {
+func Mount(r chi.Router, store *Store, auth *shared.Store, notify Notifier) {
 	r.Group(func(g chi.Router) {
 		g.Use(requireLogin(auth))
 		g.Get("/state", handleGetState(store))
-		g.Put("/state", handlePutState(store))
+		g.Put("/state", handlePutState(store, notify))
 	})
 }
 
@@ -119,7 +164,7 @@ func handleGetState(store *Store) http.HandlerFunc {
 	}
 }
 
-func handlePutState(store *Store) http.HandlerFunc {
+func handlePutState(store *Store, notify Notifier) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		username := r.Context().Value(userKey).(string)
 		var st CupState
@@ -131,10 +176,14 @@ func handlePutState(store *Store) http.HandlerFunc {
 			http.Error(w, "state out of range", http.StatusBadRequest)
 			return
 		}
-		if err := store.PutState(username, st); err != nil {
+		wasBroken, err := store.PutState(username, st)
+		if err != nil {
 			log.Printf("[bap] put state error: %v", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
+		}
+		if st.Broken && !wasBroken {
+			go notify.Notify(username, st.Shatters)
 		}
 		writeJSON(w, http.StatusOK, st)
 	}
