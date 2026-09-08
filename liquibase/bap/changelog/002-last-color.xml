@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        last_color remembers the cup color the client last rolled so
+        the next page load can exclude it (no same-color twice in a
+        row). Values: blue | green | pink | '' (never rolled).
+    -->
+
+    <changeSet id="002-last-color" author="bap-server">
+        <addColumn tableName="bap_cup_state">
+            <column name="last_color" type="VARCHAR(10)" defaultValue="">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

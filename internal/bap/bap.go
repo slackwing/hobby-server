@@ -36,6 +36,13 @@ type CupState struct {
 	// ("glass", "hearts", "picks"). Transient — used only to pick the
 	// notification's exception name, never stored.
 	Burst string `json:"burst,omitempty"`
+	// Color is the cup color the client rolled ("blue"/"green"/"pink").
+	// Stored as last_color so the next load can exclude it.
+	Color string `json:"color"`
+}
+
+func validColor(c string) bool {
+	return c == "blue" || c == "green" || c == "pink"
 }
 
 // exceptionFor maps a burst kind to the fake exception in the alert
@@ -71,8 +78,8 @@ func (s *Store) GetState(username string) (CupState, error) {
 	defer cancel()
 	var st CupState
 	err := s.pool.QueryRow(ctx, `
-		SELECT cup_x, baps, broken, shatters FROM bap_cup_state WHERE username = $1
-	`, username).Scan(&st.CupX, &st.Baps, &st.Broken, &st.Shatters)
+		SELECT cup_x, baps, broken, shatters, last_color FROM bap_cup_state WHERE username = $1
+	`, username).Scan(&st.CupX, &st.Baps, &st.Broken, &st.Shatters, &st.Color)
 	if err == pgx.ErrNoRows {
 		return CupState{}, nil
 	}
@@ -85,18 +92,23 @@ func (s *Store) GetState(username string) (CupState, error) {
 func (s *Store) PutState(username string, st CupState) (wasBroken bool, err error) {
 	ctx, cancel := withCtx()
 	defer cancel()
+	color := st.Color
+	if !validColor(color) {
+		color = ""
+	}
 	err = s.pool.QueryRow(ctx, `
 		WITH old AS (SELECT broken FROM bap_cup_state WHERE username = $1)
-		INSERT INTO bap_cup_state (username, cup_x, baps, broken, shatters, updated_at)
-		VALUES ($1, $2, $3, $4, $5, NOW())
+		INSERT INTO bap_cup_state (username, cup_x, baps, broken, shatters, last_color, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, NOW())
 		ON CONFLICT (username) DO UPDATE SET
 			cup_x = EXCLUDED.cup_x,
 			baps = EXCLUDED.baps,
 			broken = EXCLUDED.broken,
 			shatters = EXCLUDED.shatters,
+			last_color = EXCLUDED.last_color,
 			updated_at = NOW()
 		RETURNING COALESCE((SELECT broken FROM old), false)
-	`, username, st.CupX, st.Baps, st.Broken, st.Shatters).Scan(&wasBroken)
+	`, username, st.CupX, st.Baps, st.Broken, st.Shatters, color).Scan(&wasBroken)
 	return wasBroken, err
 }
 
