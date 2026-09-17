@@ -23,8 +23,10 @@ schema-related here, look at how manuscript-studio does it.
   Own database (`hxh`) — unlike rv it does NOT live in the shared
   `hobby_server` DB, since every project's auth tables share the
   same `user`/`session` names. NOTE: hxh's per-project auth floor is
-  unused — the site logs in via the shared **admin** system below;
-  the `hxh` DB is reserved for future party data tables.
+  unused — the site logs in via the shared **admin** system below.
+  The `hxh` DB holds the character roster (`hxh_characters`, mirrored
+  from feathers `html/hxh/roster.json`, the master; card fields since
+  changeset 004 — see feathers `foundry/website/hxh-roster/CHARACTER.md`).
 - **bap** — the
   [bongo-cat table-bap site](https://andrewcheong.com/bap).
   Frontend: same feathers repo at `foundry/website/html/bap/`.

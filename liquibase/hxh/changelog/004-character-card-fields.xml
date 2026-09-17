@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        Card fields for the Binder (2026-09-17). The roster is shown as a
+        Greed Island style card binder, so each character carries what a
+        card prints: a card number, a short name, an emoji glyph, a rank
+        (S/A/B/C — the Binder turns it into a claim limit), the Japanese
+        name, and an affiliation. Master copy stays html/hxh/roster.json
+        (feathers); these columns mirror it for the admin Roster DB view.
+        Field rules: feathers foundry/website/hxh-roster/CHARACTER.md.
+    -->
+
+    <changeSet id="004-character-card-fields" author="hxh">
+        <addColumn tableName="hxh_characters">
+            <column name="card_no" type="INT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="name_ja" type="VARCHAR(100)" defaultValue="">
+                <constraints nullable="false"/>
+            </column>
+            <column name="first" type="VARCHAR(20)" defaultValue="">
+                <constraints nullable="false"/>
+            </column>
+            <column name="glyph" type="VARCHAR(8)" defaultValue="">
+                <constraints nullable="false"/>
+            </column>
+            <column name="rank" type="VARCHAR(1)" defaultValue="C">
+                <constraints nullable="false"/>
+            </column>
+            <column name="affiliation" type="VARCHAR(60)" defaultValue="">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

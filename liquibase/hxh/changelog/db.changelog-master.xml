@@ -13,5 +13,6 @@
     <include file="changelog/001-initial-schema.xml"/>
     <include file="changelog/002-hxh-prefix.xml"/>
     <include file="changelog/003-roster.xml"/>
+    <include file="changelog/004-character-card-fields.xml"/>
 
 </databaseChangeLog>

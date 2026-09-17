@@ -33,9 +33,19 @@ type Arc struct {
 	SortOrder int    `json:"sort_order"`
 }
 
+// Character mirrors one entry of feathers html/hxh/roster.json (the
+// master copy). Card fields (no, name_ja, first, glyph, rank,
+// affiliation) are what the Binder prints; rules in feathers
+// foundry/website/hxh-roster/CHARACTER.md.
 type Character struct {
+	No          int      `json:"no"`
 	Slug        string   `json:"slug"`
 	Name        string   `json:"name"`
+	NameJA      string   `json:"name_ja"`
+	First       string   `json:"first"`
+	Glyph       string   `json:"glyph"`
+	Rank        string   `json:"rank"`
+	Affiliation string   `json:"affiliation"`
 	Description string   `json:"description"`
 	NenTypes    []string `json:"nen_types"`
 	Weapons     []string `json:"weapons"`
@@ -95,8 +105,9 @@ func (s *Store) ListCharacters() ([]Character, error) {
 	ctx, cancel := withCtx()
 	defer cancel()
 	rows, err := s.pool.Query(ctx, `
-		SELECT slug, name, description, nen_types, weapons, arcs, images, sort_order
-		FROM hxh_characters ORDER BY sort_order, slug
+		SELECT slug, name, description, nen_types, weapons, arcs, images, sort_order,
+		       card_no, name_ja, first, glyph, rank, affiliation
+		FROM hxh_characters ORDER BY card_no, sort_order, slug
 	`)
 	if err != nil {
 		return nil, err
@@ -107,7 +118,8 @@ func (s *Store) ListCharacters() ([]Character, error) {
 		var c Character
 		var nen, weapons, arcs string
 		var images []byte
-		if err := rows.Scan(&c.Slug, &c.Name, &c.Description, &nen, &weapons, &arcs, &images, &c.SortOrder); err != nil {
+		if err := rows.Scan(&c.Slug, &c.Name, &c.Description, &nen, &weapons, &arcs, &images, &c.SortOrder,
+			&c.No, &c.NameJA, &c.First, &c.Glyph, &c.Rank, &c.Affiliation); err != nil {
 			return nil, err
 		}
 		c.NenTypes = splitSlugs(nen)
@@ -147,9 +159,16 @@ func (s *Store) UpsertCharacters(chars []Character, replace bool) error {
 		if err != nil {
 			return err
 		}
+		if c.Rank == "" {
+			c.Rank = "C"
+		}
+		if c.SortOrder == 0 {
+			c.SortOrder = c.No
+		}
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO hxh_characters (slug, name, description, nen_types, weapons, arcs, images, sort_order, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+			INSERT INTO hxh_characters (slug, name, description, nen_types, weapons, arcs, images, sort_order,
+			                            card_no, name_ja, first, glyph, rank, affiliation, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW())
 			ON CONFLICT (slug) DO UPDATE SET
 				name = EXCLUDED.name,
 				description = EXCLUDED.description,
@@ -158,9 +177,16 @@ func (s *Store) UpsertCharacters(chars []Character, replace bool) error {
 				arcs = EXCLUDED.arcs,
 				images = EXCLUDED.images,
 				sort_order = EXCLUDED.sort_order,
+				card_no = EXCLUDED.card_no,
+				name_ja = EXCLUDED.name_ja,
+				first = EXCLUDED.first,
+				glyph = EXCLUDED.glyph,
+				rank = EXCLUDED.rank,
+				affiliation = EXCLUDED.affiliation,
 				updated_at = NOW()
 		`, c.Slug, c.Name, c.Description, joinSlugs(c.NenTypes), joinSlugs(c.Weapons),
-			joinSlugs(c.Arcs), images, c.SortOrder); err != nil {
+			joinSlugs(c.Arcs), images, c.SortOrder,
+			c.No, c.NameJA, c.First, c.Glyph, c.Rank, c.Affiliation); err != nil {
 			return err
 		}
 	}
