@@ -67,8 +67,9 @@ will break the frontend. Each project has paired repos:
 - **bap**: feathers' `foundry/website/html/bap/` ↔ this repo's `bap`
   project (`internal/bap/` + `liquibase/bap/`)
 - **admin**: feathers' `foundry/website/html/admin/` (console +
-  reset page) and each site's `invite.html` ↔ this repo's
-  `internal/shared/` + `liquibase/admin/`
+  reset page) and each site's `_invite/` page and `_email/` templates
+  ↔ this repo's `internal/shared/` + `internal/mailer/` +
+  `liquibase/admin/`
 
 Check both before changing the wire format.
 

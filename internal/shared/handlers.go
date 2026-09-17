@@ -2,12 +2,16 @@ package shared
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+
+	"github.com/slackwing/hobby-server/internal/mailer"
 )
 
 // CookieName is the SSO session cookie, shared by every website on the
@@ -16,14 +20,17 @@ const CookieName = "hobby_session"
 
 // Mount wires the shared-auth endpoints onto the admin project's
 // sub-router. cookiePath comes from config (should be "/"); secure
-// mirrors the server env.
-func Mount(r chi.Router, store *Store, cookiePath string, secure bool) {
+// mirrors the server env; email may be unconfigured (sends then 503).
+func Mount(r chi.Router, store *Store, cookiePath string, secure bool, email Email) {
 	// Public.
 	r.Post("/login", handleLogin(store, cookiePath, secure))
 	r.Post("/logout", handleLogout(store, cookiePath, secure))
 	r.Get("/me", handleMe(store))
 	r.Get("/token-info", handleTokenInfo(store))
-	r.Post("/set-password", handleSetPassword(store, cookiePath, secure))
+	r.Post("/set-password", handleSetPassword(store, cookiePath, secure, email))
+
+	// Logged-in users.
+	r.Post("/password", handleChangePassword(store))
 
 	// Admin-only: requires role "admin" on website "admin".
 	r.Group(func(g chi.Router) {
@@ -36,6 +43,8 @@ func Mount(r chi.Router, store *Store, cookiePath string, secure bool) {
 		g.Post("/roles", handleAddRole(store))
 		g.Delete("/roles", handleRemoveRole(store))
 		g.Post("/links", handleCreateLink(store))
+		g.Get("/email-status", handleEmailStatus(email))
+		g.Post("/email", handleSendEmail(store, email))
 	})
 }
 
@@ -92,8 +101,8 @@ func setCookie(w http.ResponseWriter, token, cookiePath string, secure, clear bo
 
 // mePayload is what login, set-password, and /me all return.
 func mePayload(store *Store, username string) (map[string]any, error) {
-	displayName, _, ok, err := store.GetUser(username)
-	if err != nil || !ok {
+	acct, err := store.GetUser(username)
+	if err != nil || acct == nil {
 		return nil, fmt.Errorf("user %q lookup failed: %w", username, err)
 	}
 	roles, err := store.UserRoles(username)
@@ -101,10 +110,22 @@ func mePayload(store *Store, username string) (map[string]any, error) {
 		return nil, err
 	}
 	return map[string]any{
-		"username":     username,
-		"display_name": displayName,
+		"username":     acct.Username,
+		"display_name": acct.DisplayName,
+		"initial":      acct.Initial,
+		"color":        acct.Color,
+		"email":        acct.Email,
 		"roles":        roles,
 	}, nil
+}
+
+// requestBase mirrors Email.base for link building.
+func requestBase(r *http.Request) string {
+	proto := r.Header.Get("X-Forwarded-Proto")
+	if proto == "" {
+		proto = "http"
+	}
+	return proto + "://" + r.Host
 }
 
 // ---------- public handlers ----------
@@ -123,7 +144,7 @@ func handleLogin(store *Store, cookiePath string, secure bool) http.HandlerFunc 
 			http.Error(w, "username and password required", http.StatusBadRequest)
 			return
 		}
-		_, hash, ok, err := store.GetUser(req.Username)
+		acct, err := store.GetUser(req.Username)
 		if err != nil {
 			log.Printf("[admin] login lookup error: %v", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
@@ -131,12 +152,12 @@ func handleLogin(store *Store, cookiePath string, secure bool) http.HandlerFunc 
 		}
 		// Unknown user and unset password both take the dummy-verify
 		// path so timing doesn't leak which usernames exist.
-		if !ok || hash == nil {
+		if acct == nil || acct.PasswordHash == nil {
 			VerifyDummy(req.Password)
 			http.Error(w, "invalid credentials", http.StatusUnauthorized)
 			return
 		}
-		if !VerifyPassword(req.Password, *hash) {
+		if !VerifyPassword(req.Password, *acct.PasswordHash) {
 			http.Error(w, "invalid credentials", http.StatusUnauthorized)
 			return
 		}
@@ -204,22 +225,22 @@ func handleTokenInfo(store *Store) http.HandlerFunc {
 			http.Error(w, "invalid or expired link", http.StatusNotFound)
 			return
 		}
-		displayName, _, _, err := store.GetUser(username)
-		if err != nil {
+		acct, err := store.GetUser(username)
+		if err != nil || acct == nil {
 			log.Printf("[admin] token user lookup error: %v", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"username":     username,
-			"display_name": displayName,
+			"display_name": acct.DisplayName,
 			"website":      website,
 			"expires_at":   expiresAt,
 		})
 	}
 }
 
-func handleSetPassword(store *Store, cookiePath string, secure bool) http.HandlerFunc {
+func handleSetPassword(store *Store, cookiePath string, secure bool, email Email) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Code     string `json:"code"`
@@ -243,7 +264,7 @@ func handleSetPassword(store *Store, cookiePath string, secure bool) http.Handle
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		username, ok, err := store.ConsumeToken(req.Code, hash)
+		username, website, ok, err := store.ConsumeToken(req.Code, hash)
 		if err != nil {
 			log.Printf("[admin] consume token error: %v", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
@@ -267,7 +288,44 @@ func handleSetPassword(store *Store, cookiePath string, secure bool) http.Handle
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
+		// Welcome email, if the site defines one (best effort).
+		go email.SendOnAccept(store, email.base(r), website, username)
 		writeJSON(w, http.StatusOK, body)
+	}
+}
+
+// handleChangePassword lets a logged-in user set a new password with
+// no link — what /<site>/_invite/ does when opened without a code.
+func handleChangePassword(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		username, ok := sessionUser(store, r)
+		if !ok {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		var req struct {
+			Password string `json:"password"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		if err := ValidatePassword(req.Password); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		hash, err := HashPassword(req.Password)
+		if err != nil {
+			log.Printf("[admin] hash error: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if _, err := store.SetPassword(username, hash); err != nil {
+			log.Printf("[admin] set password error: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
@@ -285,12 +343,54 @@ func handleListUsers(store *Store) http.HandlerFunc {
 	}
 }
 
+type userReq struct {
+	Username    string  `json:"username"`
+	DisplayName *string `json:"display_name"`
+	Initial     *string `json:"initial"`
+	Color       *string `json:"color"`
+	Email       *string `json:"email"`
+}
+
+// validateProfile trims and checks whichever profile fields are
+// present, returning them as an update map.
+func validateProfile(req userReq) (map[string]string, error) {
+	fields := map[string]string{}
+	if req.DisplayName != nil {
+		v := strings.TrimSpace(*req.DisplayName)
+		if v == "" {
+			return nil, fmt.Errorf("display_name required")
+		}
+		fields["display_name"] = v
+	}
+	if req.Initial != nil {
+		v := strings.TrimSpace(*req.Initial)
+		if err := ValidateInitial(v); err != nil {
+			return nil, err
+		}
+		fields["initial"] = v
+	}
+	if req.Color != nil {
+		v := strings.ToLower(strings.TrimSpace(*req.Color))
+		if err := ValidateColor(v); err != nil {
+			return nil, err
+		}
+		fields["color"] = v
+	}
+	if req.Email != nil {
+		v := strings.TrimSpace(*req.Email)
+		if v != "" {
+			if err := ValidateEmail(v); err != nil {
+				return nil, err
+			}
+		}
+		fields["email"] = v
+	}
+	return fields, nil
+}
+
 func handleCreateUser(store *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Username    string `json:"username"`
-			DisplayName string `json:"display_name"`
-		}
+		var req userReq
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "bad json", http.StatusBadRequest)
 			return
@@ -299,33 +399,57 @@ func handleCreateUser(store *Store) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if req.DisplayName == "" {
+		if req.DisplayName == nil || strings.TrimSpace(*req.DisplayName) == "" {
 			http.Error(w, "display_name required", http.StatusBadRequest)
 			return
 		}
-		if err := store.CreateUser(req.Username, req.DisplayName); err != nil {
+		fields, err := validateProfile(req)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		acct := Account{
+			Username:    req.Username,
+			DisplayName: fields["display_name"],
+			Initial:     fields["initial"],
+			Color:       fields["color"],
+			Email:       fields["email"],
+		}
+		// Defaults the console normally supplies but scripts may omit.
+		if acct.Initial == "" {
+			acct.Initial = DefaultInitial(acct.DisplayName)
+		}
+		if acct.Color == "" {
+			acct.Color = RandomColor()
+		}
+		if err := store.CreateUser(acct); err != nil {
 			http.Error(w, "could not create user (already exists?)", http.StatusConflict)
 			return
 		}
-		writeJSON(w, http.StatusCreated, map[string]string{"username": req.Username})
+		writeJSON(w, http.StatusCreated, map[string]string{
+			"username": acct.Username, "initial": acct.Initial, "color": acct.Color,
+		})
 	}
 }
 
 func handlePatchUser(store *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		username := chi.URLParam(r, "username")
-		var req struct {
-			DisplayName string `json:"display_name"`
-		}
+		var req userReq
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "bad json", http.StatusBadRequest)
 			return
 		}
-		if req.DisplayName == "" {
-			http.Error(w, "display_name required", http.StatusBadRequest)
+		fields, err := validateProfile(req)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		found, err := store.UpdateDisplayName(username, req.DisplayName)
+		if len(fields) == 0 {
+			http.Error(w, "nothing to update", http.StatusBadRequest)
+			return
+		}
+		found, err := store.UpdateUser(username, fields)
 		if err != nil {
 			log.Printf("[admin] patch user error: %v", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
@@ -420,11 +544,12 @@ func handleRemoveRole(store *Store) http.HandlerFunc {
 // handleCreateLink mints an invite or reset link.
 //
 //	{"username": "abi", "type": "reset"}                      → <base>/admin/reset.html?code=...   (1h)
-//	{"username": "abi", "type": "invite", "website": "hxh"}   → <base>/hxh/invite.html?code=...    (7d)
+//	{"username": "abi", "type": "invite", "website": "hxh"}   → <base>/hxh/_invite/?code=...       (7d)
 //
-// The base URL is derived from the request (X-Forwarded-Proto + Host,
-// which Apache sets). The code appears only in the response — the DB
-// keeps just its hash.
+// Every website hosts its invite page at the standard path
+// /<website>/_invite/ (feathers repo). The base URL is derived from the
+// request (X-Forwarded-Proto + Host, which Apache sets). The code
+// appears only in the response — the DB keeps just its hash.
 func handleCreateLink(store *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
@@ -436,13 +561,13 @@ func handleCreateLink(store *Store) http.HandlerFunc {
 			http.Error(w, "bad json", http.StatusBadRequest)
 			return
 		}
-		_, _, userExists, err := store.GetUser(req.Username)
+		acct, err := store.GetUser(req.Username)
 		if err != nil {
 			log.Printf("[admin] link user lookup error: %v", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		if !userExists {
+		if acct == nil {
 			http.Error(w, "no such user", http.StatusNotFound)
 			return
 		}
@@ -463,7 +588,7 @@ func handleCreateLink(store *Store) http.HandlerFunc {
 				http.Error(w, "no such website", http.StatusBadRequest)
 				return
 			}
-			website, path, ttl = req.Website, "/"+req.Website+"/invite.html", InviteTTL
+			website, path, ttl = req.Website, "/"+req.Website+"/_invite/", InviteTTL
 		default:
 			http.Error(w, `type must be "reset" or "invite"`, http.StatusBadRequest)
 			return
@@ -475,14 +600,84 @@ func handleCreateLink(store *Store) http.HandlerFunc {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		proto := r.Header.Get("X-Forwarded-Proto")
-		if proto == "" {
-			proto = "http"
-		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"url":        fmt.Sprintf("%s://%s%s?code=%s", proto, r.Host, path, code),
+			"url":        fmt.Sprintf("%s%s?code=%s", requestBase(r), path, code),
 			"expires_at": expiresAt,
 		})
+	}
+}
+
+// handleEmailStatus tells the console whether sending is possible.
+func handleEmailStatus(email Email) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"configured": email.Configured(),
+			"from":       email.Mailer.From,
+		})
+	}
+}
+
+// handleSendEmail renders a website's _email/ template for a user and
+// sends it. {"username","website","template"}; invite templates mint a
+// fresh invite link, returned alongside so the admin can also copy it.
+func handleSendEmail(store *Store, email Email) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Username string `json:"username"`
+			Website  string `json:"website"`
+			Template string `json:"template"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		if req.Username == "" || req.Website == "" || req.Template == "" {
+			http.Error(w, "username, website, template required", http.StatusBadRequest)
+			return
+		}
+		if !email.Configured() {
+			http.Error(w, "email not configured on the server", http.StatusServiceUnavailable)
+			return
+		}
+		exists, err := store.WebsiteExists(req.Website)
+		if err != nil {
+			log.Printf("[admin] website lookup error: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if !exists {
+			http.Error(w, "no such website", http.StatusBadRequest)
+			return
+		}
+		acct, err := store.GetUser(req.Username)
+		if err != nil {
+			log.Printf("[admin] email user lookup error: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if acct == nil {
+			http.Error(w, "no such user", http.StatusNotFound)
+			return
+		}
+		res, err := email.Send(r.Context(), store, email.base(r), req.Website, req.Template, acct)
+		switch {
+		case err == nil:
+		case errors.Is(err, ErrNoEmail):
+			http.Error(w, "user has no email address", http.StatusBadRequest)
+			return
+		case errors.Is(err, ErrNoTemplate):
+			http.Error(w, "no such template for that website", http.StatusNotFound)
+			return
+		case errors.Is(err, mailer.ErrNotConfigured):
+			http.Error(w, "email not configured on the server", http.StatusServiceUnavailable)
+			return
+		default:
+			log.Printf("[admin] send email (%s/%s) to %s failed: %v", req.Website, req.Template, req.Username, err)
+			http.Error(w, "sending failed: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+		log.Printf("[admin] sent %s/%s email to %s", req.Website, req.Template, req.Username)
+		writeJSON(w, http.StatusOK, res)
 	}
 }
 

@@ -68,6 +68,12 @@ state, etc.) as needed.
   project, never edit landed changesets). Table names carry the
   project prefix (`hxh_characters`, not `characters`) — see
   AGENTS.md N7; rv's unprefixed tables are grandfathered.
+- `internal/shared/` — the shared auth system (users with
+  initial/colour/email profile fields, roles, sessions, links) and
+  `email.go`, which fetches each website's `_email/` templates over
+  HTTP and sends them via `internal/mailer/` (SMTP; server-wide
+  `email:` block in config.yaml, optional — unconfigured = the console
+  says so). Guide: `docs/SHARED_AUTH.md`.
 - `install.sh` — Docker build + per-project Liquibase + restart
 - `docs/SETUP.md` — first-time VM walkthrough
 - `docs/SHARED_AUTH.md` — how ANY website integrates the shared

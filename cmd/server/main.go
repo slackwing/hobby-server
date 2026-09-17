@@ -41,6 +41,7 @@ import (
 	"github.com/slackwing/hobby-server/internal/config"
 	"github.com/slackwing/hobby-server/internal/database"
 	"github.com/slackwing/hobby-server/internal/hxh"
+	"github.com/slackwing/hobby-server/internal/mailer"
 	"github.com/slackwing/hobby-server/internal/prep"
 	"github.com/slackwing/hobby-server/internal/rvedit"
 	"github.com/slackwing/hobby-server/internal/shared"
@@ -212,8 +213,19 @@ func main() {
 	}
 
 	if adminProject != nil {
+		// Server-wide SMTP sender for templated emails (invites,
+		// welcomes). Unconfigured = the console's send buttons 503.
+		email := shared.Email{
+			Mailer: mailer.Mailer{
+				Host: cfg.Email.SMTPHost, Port: cfg.Email.SMTPPort,
+				Username: cfg.Email.Username, Password: cfg.Email.Password,
+				From: cfg.Email.From,
+			},
+			BaseURL: cfg.Email.SiteBaseURL,
+		}
+		log.Printf("project %q email: configured=%v", adminProject.Name, email.Configured())
 		r.Route(adminProject.URLPrefix, func(sub chi.Router) {
-			shared.Mount(sub, adminStore, adminProject.CookiePath, secureCookies)
+			shared.Mount(sub, adminStore, adminProject.CookiePath, secureCookies, email)
 		})
 	}
 

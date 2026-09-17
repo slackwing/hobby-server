@@ -17,7 +17,11 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
+	"math/big"
+	"net/mail"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -33,13 +37,104 @@ const (
 	ResetTTL  = 1 * time.Hour
 )
 
-var usernameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,49}$`)
+var (
+	usernameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,49}$`)
+	colorRe    = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
+)
 
 func ValidateUsername(username string) error {
 	if !usernameRe.MatchString(username) {
 		return fmt.Errorf("username must be 1-50 chars: lowercase letters, digits, . _ -")
 	}
 	return nil
+}
+
+// ValidateInitial: 1-3 visible characters (the avatar circle fits two
+// comfortably, three at a squeeze).
+func ValidateInitial(initial string) error {
+	n := len([]rune(initial))
+	if n < 1 || n > 3 || strings.ContainsAny(initial, " \t\r\n") {
+		return fmt.Errorf("initial must be 1-3 characters")
+	}
+	return nil
+}
+
+func ValidateColor(color string) error {
+	if !colorRe.MatchString(color) {
+		return fmt.Errorf("color must be #rrggbb")
+	}
+	return nil
+}
+
+// ValidateEmail accepts a bare address only (no display-name form) —
+// it is stored verbatim and handed to the mailer.
+func ValidateEmail(email string) error {
+	if len(email) > 254 {
+		return fmt.Errorf("email too long")
+	}
+	a, err := mail.ParseAddress(email)
+	if err != nil || a.Address != email {
+		return fmt.Errorf("email must be a plain address like name@example.com")
+	}
+	return nil
+}
+
+// DefaultInitial is the first letter of the display name, uppercased.
+func DefaultInitial(displayName string) string {
+	for _, r := range strings.TrimSpace(displayName) {
+		return strings.ToUpper(string(r))
+	}
+	return "?"
+}
+
+// RandomColor picks a random hue at fixed saturation/lightness so every
+// generated avatar colour is vivid and mid-tone (readable with either
+// ink or cream initials). The console uses the same formula client-side
+// to prefill its picker.
+func RandomColor() string {
+	n, err := rand.Int(rand.Reader, big.NewInt(360))
+	if err != nil {
+		return "#4a7fa0"
+	}
+	return hslToHex(float64(n.Int64()), 0.55, 0.45)
+}
+
+func hslToHex(h, s, l float64) string {
+	c := (1 - math.Abs(2*l-1)) * s
+	x := c * (1 - math.Abs(math.Mod(h/60, 2)-1))
+	m := l - c/2
+	var r, g, b float64
+	switch {
+	case h < 60:
+		r, g, b = c, x, 0
+	case h < 120:
+		r, g, b = x, c, 0
+	case h < 180:
+		r, g, b = 0, c, x
+	case h < 240:
+		r, g, b = 0, x, c
+	case h < 300:
+		r, g, b = x, 0, c
+	default:
+		r, g, b = c, 0, x
+	}
+	to := func(v float64) int { return int(math.Round((v + m) * 255)) }
+	return fmt.Sprintf("#%02x%02x%02x", to(r), to(g), to(b))
+}
+
+// TextColorFor returns ink on pale backgrounds and cream on dark ones —
+// the same luminance rule the rv admin page uses for its avatar chips.
+func TextColorFor(hex string) string {
+	if !colorRe.MatchString(hex) {
+		return "#fff6e0"
+	}
+	var r, g, b int
+	fmt.Sscanf(hex[1:], "%02x%02x%02x", &r, &g, &b)
+	lum := 0.2126*float64(r) + 0.7152*float64(g) + 0.0722*float64(b)
+	if lum > 170 {
+		return "#0b0a08"
+	}
+	return "#fff6e0"
 }
 
 type Role struct {
@@ -50,9 +145,23 @@ type Role struct {
 type User struct {
 	Username    string    `json:"username"`
 	DisplayName string    `json:"display_name"`
+	Initial     string    `json:"initial"`
+	Color       string    `json:"color"`
+	Email       string    `json:"email"`
 	HasPassword bool      `json:"has_password"`
 	CreatedAt   time.Time `json:"created_at"`
 	Roles       []Role    `json:"roles"`
+}
+
+// Account is one hobby_server_user row as the handlers need it.
+// Email is "" when unset; PasswordHash nil until set via a link.
+type Account struct {
+	Username     string
+	DisplayName  string
+	Initial      string
+	Color        string
+	Email        string
+	PasswordHash *string
 }
 
 type Website struct {
@@ -76,27 +185,30 @@ func withCtx() (context.Context, context.CancelFunc) {
 
 // ---------- users ----------
 
-// GetUser returns display name and password hash (nil = unset).
-func (s *Store) GetUser(username string) (displayName string, hash *string, ok bool, err error) {
+// GetUser returns the account, or nil when the username is unknown.
+func (s *Store) GetUser(username string) (*Account, error) {
 	ctx, cancel := withCtx()
 	defer cancel()
-	err = s.pool.QueryRow(ctx, `
-		SELECT display_name, password_hash FROM hobby_server_user WHERE username = $1
-	`, username).Scan(&displayName, &hash)
+	var a Account
+	err := s.pool.QueryRow(ctx, `
+		SELECT username, display_name, initial, color, COALESCE(email, ''), password_hash
+		FROM hobby_server_user WHERE username = $1
+	`, username).Scan(&a.Username, &a.DisplayName, &a.Initial, &a.Color, &a.Email, &a.PasswordHash)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", nil, false, nil
+		return nil, nil
 	}
 	if err != nil {
-		return "", nil, false, err
+		return nil, err
 	}
-	return displayName, hash, true, nil
+	return &a, nil
 }
 
 func (s *Store) ListUsers() ([]User, error) {
 	ctx, cancel := withCtx()
 	defer cancel()
 	rows, err := s.pool.Query(ctx, `
-		SELECT username, display_name, password_hash IS NOT NULL, created_at
+		SELECT username, display_name, initial, color, COALESCE(email, ''),
+		       password_hash IS NOT NULL, created_at
 		FROM hobby_server_user ORDER BY username
 	`)
 	if err != nil {
@@ -107,7 +219,7 @@ func (s *Store) ListUsers() ([]User, error) {
 	users := []User{}
 	for rows.Next() {
 		var u User
-		if err := rows.Scan(&u.Username, &u.DisplayName, &u.HasPassword, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.Username, &u.DisplayName, &u.Initial, &u.Color, &u.Email, &u.HasPassword, &u.CreatedAt); err != nil {
 			return nil, err
 		}
 		u.Roles = []Role{}
@@ -140,12 +252,15 @@ func (s *Store) ListUsers() ([]User, error) {
 	return users, rrows.Err()
 }
 
-func (s *Store) CreateUser(username, displayName string) error {
+// CreateUser inserts an account (password unset). Email "" is stored
+// as NULL.
+func (s *Store) CreateUser(a Account) error {
 	ctx, cancel := withCtx()
 	defer cancel()
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO hobby_server_user (username, display_name) VALUES ($1, $2)
-	`, username, displayName)
+		INSERT INTO hobby_server_user (username, display_name, initial, color, email)
+		VALUES ($1, $2, $3, $4, NULLIF($5, ''))
+	`, a.Username, a.DisplayName, a.Initial, a.Color, a.Email)
 	return err
 }
 
@@ -160,12 +275,42 @@ func (s *Store) DeleteUser(username string) (bool, error) {
 	return tag.RowsAffected() > 0, err
 }
 
-func (s *Store) UpdateDisplayName(username, displayName string) (bool, error) {
+// UpdateUser patches any of display_name / initial / color / email
+// (already validated by the handler). Returns false for unknown users.
+func (s *Store) UpdateUser(username string, fields map[string]string) (bool, error) {
+	if len(fields) == 0 {
+		return true, nil
+	}
+	sets := []string{}
+	args := []any{}
+	for _, k := range []string{"display_name", "initial", "color", "email"} {
+		v, ok := fields[k]
+		if !ok {
+			continue
+		}
+		args = append(args, v)
+		if k == "email" {
+			sets = append(sets, fmt.Sprintf("email = NULLIF($%d, '')", len(args)))
+		} else {
+			sets = append(sets, fmt.Sprintf("%s = $%d", k, len(args)))
+		}
+	}
+	args = append(args, username)
+	ctx, cancel := withCtx()
+	defer cancel()
+	tag, err := s.pool.Exec(ctx, fmt.Sprintf(`
+		UPDATE hobby_server_user SET %s WHERE username = $%d
+	`, strings.Join(sets, ", "), len(args)), args...)
+	return tag.RowsAffected() > 0, err
+}
+
+// SetPassword replaces a logged-in user's password hash (no token).
+func (s *Store) SetPassword(username, passwordHash string) (bool, error) {
 	ctx, cancel := withCtx()
 	defer cancel()
 	tag, err := s.pool.Exec(ctx, `
-		UPDATE hobby_server_user SET display_name = $1 WHERE username = $2
-	`, displayName, username)
+		UPDATE hobby_server_user SET password_hash = $1 WHERE username = $2
+	`, passwordHash, username)
 	return tag.RowsAffected() > 0, err
 }
 
@@ -404,37 +549,37 @@ func (s *Store) LookupToken(code string) (username, website string, expiresAt ti
 }
 
 // ConsumeToken atomically marks the token used and sets the user's
-// password hash. Returns the username, or ok=false if the token was
+// password hash. Returns the username and the website the token was
+// minted for ("admin" for resets), or ok=false if the token was
 // invalid (already used, expired, unknown).
-func (s *Store) ConsumeToken(code, passwordHash string) (string, bool, error) {
+func (s *Store) ConsumeToken(code, passwordHash string) (username, website string, ok bool, err error) {
 	ctx, cancel := withCtx()
 	defer cancel()
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return "", false, err
+		return "", "", false, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	var username string
 	err = tx.QueryRow(ctx, `
 		UPDATE hobby_server_password_token SET used_at = NOW()
 		WHERE token_hash = $1 AND used_at IS NULL AND expires_at > NOW()
-		RETURNING username
-	`, hashCode(code)).Scan(&username)
+		RETURNING username, website
+	`, hashCode(code)).Scan(&username, &website)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", false, nil
+		return "", "", false, nil
 	}
 	if err != nil {
-		return "", false, err
+		return "", "", false, err
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE hobby_server_user SET password_hash = $1 WHERE username = $2
 	`, passwordHash, username); err != nil {
-		return "", false, err
+		return "", "", false, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return "", false, err
+		return "", "", false, err
 	}
-	return username, true, nil
+	return username, website, true, nil
 }
 
 func randomToken() (string, error) {

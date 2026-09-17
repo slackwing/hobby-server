@@ -9,6 +9,24 @@ server:
   env: "production"   # "production" sets Secure cookies; "development" doesn't
 
 # ============================================================
+# Email (optional)
+# ============================================================
+# Server-wide SMTP sender used by the shared auth system ("admin"
+# project) to send each website's templated emails — invite, welcome —
+# from the /admin/ console. Templates are static files in the website
+# itself (feathers html/<site>/_email/), fetched over HTTP at send time.
+# Omit the whole block to disable sending (the console says so).
+# Gmail: use an App Password (Google account → Security → App passwords).
+#
+# email:
+#   smtp_host: "smtp.gmail.com"
+#   smtp_port: 587
+#   username: "you@gmail.com"
+#   password: "REPLACE_ME"          # app password, never logged
+#   from: "Andrew Cheong <you@gmail.com>"
+#   # site_base_url: "http://127.0.0.1:8765"   # dev only; prod derives from the request
+
+# ============================================================
 # Projects
 # ============================================================
 # Each project gets its own database, URL prefix, and cookie scope.

@@ -58,8 +58,29 @@ type Server struct {
 	Env  string `yaml:"env"` // "development" or "production"
 }
 
+// Email is the server-wide SMTP sender used by the shared auth system
+// (internal/shared) for templated emails — invites, welcomes. Leave
+// the whole block out to disable sending; the admin console then
+// reports "email not configured". Any STARTTLS submission endpoint
+// works (Gmail app password on smtp.gmail.com:587, etc.).
+type Email struct {
+	SMTPHost string `yaml:"smtp_host"`
+	SMTPPort int    `yaml:"smtp_port"` // default 587
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
+	From     string `yaml:"from"` // "Name <addr>" or bare address
+
+	// SiteBaseURL overrides where a website's _email/ templates are
+	// fetched from and what links in emails point at. Empty (the
+	// production setting) derives it from each request's
+	// X-Forwarded-Proto + Host, i.e. https://andrewcheong.com.
+	// Set it only in dev, to point at a local static server.
+	SiteBaseURL string `yaml:"site_base_url"`
+}
+
 type Config struct {
 	Server   Server    `yaml:"server"`
+	Email    Email     `yaml:"email"`
 	Projects []Project `yaml:"projects"`
 }
 
@@ -77,6 +98,14 @@ func Load(path string) (*Config, error) {
 	}
 	if len(c.Projects) == 0 {
 		return nil, fmt.Errorf("config.projects: at least one project required")
+	}
+	if c.Email.SMTPHost != "" {
+		if c.Email.From == "" {
+			return nil, fmt.Errorf("config.email.from is required when smtp_host is set")
+		}
+		if c.Email.SMTPPort == 0 {
+			c.Email.SMTPPort = 587
+		}
 	}
 	seen := map[string]bool{}
 	for i := range c.Projects {
