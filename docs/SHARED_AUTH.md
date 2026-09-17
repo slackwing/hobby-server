@@ -98,10 +98,14 @@ password is the intended recovery path. Generate links (or send them
 by email) in the `/admin/` console.
 
 The invite page must make it obvious the invitee CHOOSES a password
-right there (nobody sends them one). Opened WITHOUT a code by a
-logged-in user, it shows the same form as a "change password" for
-that user (POST `/admin/api/password`) — handy for admins previewing
-the page.
+right there (nobody sends them one) — say "password", not
+"passphrase". Opened WITHOUT a code by a logged-in user, it shows the
+same form as a "change password" for that user (POST
+`/admin/api/password`). It should honour `?preview=invite|change|void`
+(forced state, sample data, no network side effects) so the site can
+ship `/<website>/_invite/preview.html`: an admin-only previewer in the
+plain `/admin/` console style showing all three states in an inert
+frame — the same pattern as `_email/index.html`.
 
 ## Email templates (`/<website>/_email/`)
 
