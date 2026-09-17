@@ -124,8 +124,11 @@ time from the public site (or `email.site_base_url` in dev).
   external CSS/fonts (web fonts don't survive Gmail). Match the site's
   theme by hand.
 - `index.html` — admin-only preview page: lists the manifest, renders
-  each template with the logged-in admin's own values as samples, and
-  has a "send test to me" button (`POST /admin/api/email`).
+  each template with the logged-in admin's own values as samples in an
+  inert frame, and has a "send test to me" button
+  (`POST /admin/api/email`). Style it like the plain `/admin/` console
+  (link `/admin/assets/style.css`), NOT like the site, so the themed
+  email in the frame is obviously the email.
 
 Variables, substituted as `{{name}}` (HTML-escaped in bodies, raw in
 subjects; unknown names become empty): `display_name`, `username`,
