@@ -157,10 +157,11 @@ time from the public site (or `email.site_base_url` in dev).
   Email-safe HTML: tables, inline styles, no external CSS/fonts (web
   fonts don't survive Gmail).
 - `index.html` — admin-only preview page: tabs for the manifest, the
-  rendered email in an inert frame, "send test to me". Style it like
-  the plain `/admin/` console (link `/admin/assets/style.css`), NOT
-  like the site, so the themed email in the frame is obviously the
-  email. Honour `?template=<id>` and `?user=<username>` (the console's
+  rendered email in an inert frame, "send test to me". It links the
+  administrative base stylesheet `/admin/assets/style.css` (the same
+  one the console and the default pages use) rather than the site's
+  theme, so everything an admin operates looks like one tool and the
+  themed email in the frame is obviously the email. Honour `?template=<id>` and `?user=<username>` (the console's
   Preview button opens `/<site>/_email/?template=…&user=…`; previewing
   as another user needs the console role and falls back to yourself).
 
