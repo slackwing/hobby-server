@@ -49,14 +49,32 @@ func ValidateUsername(username string) error {
 	return nil
 }
 
-// ValidateInitial: 1-3 visible characters (the avatar circle fits two
-// comfortably, three at a squeeze).
+// ValidateInitial: 1-2 visible characters (the avatar circle).
 func ValidateInitial(initial string) error {
 	n := len([]rune(initial))
-	if n < 1 || n > 3 || strings.ContainsAny(initial, " \t\r\n") {
-		return fmt.Errorf("initial must be 1-3 characters")
+	if n < 1 || n > 2 || strings.ContainsAny(initial, " \t\r\n") {
+		return fmt.Errorf("initial must be 1-2 characters")
 	}
 	return nil
+}
+
+// DefaultInitial is the first letter of each of the first two words of
+// the display name, uppercased ("Andrew C" -> "AC", "Tampopo" -> "T").
+func DefaultInitial(displayName string) string {
+	out := ""
+	for i, w := range strings.Fields(displayName) {
+		if i == 2 {
+			break
+		}
+		for _, r := range w {
+			out += strings.ToUpper(string(r))
+			break
+		}
+	}
+	if out == "" {
+		return "?"
+	}
+	return out
 }
 
 func ValidateColor(color string) error {
@@ -77,14 +95,6 @@ func ValidateEmail(email string) error {
 		return fmt.Errorf("email must be a plain address like name@example.com")
 	}
 	return nil
-}
-
-// DefaultInitial is the first letter of the display name, uppercased.
-func DefaultInitial(displayName string) string {
-	for _, r := range strings.TrimSpace(displayName) {
-		return strings.ToUpper(string(r))
-	}
-	return "?"
 }
 
 // RandomColor picks a random hue at fixed saturation/lightness so every
@@ -148,6 +158,7 @@ type User struct {
 	Initial     string    `json:"initial"`
 	Color       string    `json:"color"`
 	Email       string    `json:"email"`
+	ActiveSite  string    `json:"active_site"`
 	HasPassword bool      `json:"has_password"`
 	CreatedAt   time.Time `json:"created_at"`
 	Roles       []Role    `json:"roles"`
@@ -161,6 +172,7 @@ type Account struct {
 	Initial      string
 	Color        string
 	Email        string
+	ActiveSite   string // the website the console acts on for this user; "" = none
 	PasswordHash *string
 }
 
@@ -191,9 +203,9 @@ func (s *Store) GetUser(username string) (*Account, error) {
 	defer cancel()
 	var a Account
 	err := s.pool.QueryRow(ctx, `
-		SELECT username, display_name, initial, color, COALESCE(email, ''), password_hash
+		SELECT username, display_name, initial, color, COALESCE(email, ''), COALESCE(active_site, ''), password_hash
 		FROM hobby_server_user WHERE username = $1
-	`, username).Scan(&a.Username, &a.DisplayName, &a.Initial, &a.Color, &a.Email, &a.PasswordHash)
+	`, username).Scan(&a.Username, &a.DisplayName, &a.Initial, &a.Color, &a.Email, &a.ActiveSite, &a.PasswordHash)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -207,7 +219,7 @@ func (s *Store) ListUsers() ([]User, error) {
 	ctx, cancel := withCtx()
 	defer cancel()
 	rows, err := s.pool.Query(ctx, `
-		SELECT username, display_name, initial, color, COALESCE(email, ''),
+		SELECT username, display_name, initial, color, COALESCE(email, ''), COALESCE(active_site, ''),
 		       password_hash IS NOT NULL, created_at
 		FROM hobby_server_user ORDER BY username
 	`)
@@ -219,7 +231,7 @@ func (s *Store) ListUsers() ([]User, error) {
 	users := []User{}
 	for rows.Next() {
 		var u User
-		if err := rows.Scan(&u.Username, &u.DisplayName, &u.Initial, &u.Color, &u.Email, &u.HasPassword, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.Username, &u.DisplayName, &u.Initial, &u.Color, &u.Email, &u.ActiveSite, &u.HasPassword, &u.CreatedAt); err != nil {
 			return nil, err
 		}
 		u.Roles = []Role{}
@@ -258,9 +270,9 @@ func (s *Store) CreateUser(a Account) error {
 	ctx, cancel := withCtx()
 	defer cancel()
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO hobby_server_user (username, display_name, initial, color, email)
-		VALUES ($1, $2, $3, $4, NULLIF($5, ''))
-	`, a.Username, a.DisplayName, a.Initial, a.Color, a.Email)
+		INSERT INTO hobby_server_user (username, display_name, initial, color, email, active_site)
+		VALUES ($1, $2, $3, $4, NULLIF($5, ''), NULLIF($6, ''))
+	`, a.Username, a.DisplayName, a.Initial, a.Color, a.Email, a.ActiveSite)
 	return err
 }
 
@@ -283,14 +295,14 @@ func (s *Store) UpdateUser(username string, fields map[string]string) (bool, err
 	}
 	sets := []string{}
 	args := []any{}
-	for _, k := range []string{"display_name", "initial", "color", "email"} {
+	for _, k := range []string{"display_name", "initial", "color", "email", "active_site"} {
 		v, ok := fields[k]
 		if !ok {
 			continue
 		}
 		args = append(args, v)
-		if k == "email" {
-			sets = append(sets, fmt.Sprintf("email = NULLIF($%d, '')", len(args)))
+		if k == "email" || k == "active_site" {
+			sets = append(sets, fmt.Sprintf("%s = NULLIF($%d, '')", k, len(args)))
 		} else {
 			sets = append(sets, fmt.Sprintf("%s = $%d", k, len(args)))
 		}
@@ -301,16 +313,6 @@ func (s *Store) UpdateUser(username string, fields map[string]string) (bool, err
 	tag, err := s.pool.Exec(ctx, fmt.Sprintf(`
 		UPDATE hobby_server_user SET %s WHERE username = $%d
 	`, strings.Join(sets, ", "), len(args)), args...)
-	return tag.RowsAffected() > 0, err
-}
-
-// SetPassword replaces a logged-in user's password hash (no token).
-func (s *Store) SetPassword(username, passwordHash string) (bool, error) {
-	ctx, cancel := withCtx()
-	defer cancel()
-	tag, err := s.pool.Exec(ctx, `
-		UPDATE hobby_server_user SET password_hash = $1 WHERE username = $2
-	`, passwordHash, username)
 	return tag.RowsAffected() > 0, err
 }
 
@@ -508,11 +510,18 @@ func (s *Store) cleanupExpired() {
 
 // ---------- invite / reset tokens ----------
 
+// Token kinds. An invite fires the website's "on accept" email when
+// used; a reset does not. Each kind has its own page (/_invite/, /_reset/).
+const (
+	KindInvite = "invite"
+	KindReset  = "reset"
+)
+
 // CreateToken mints a one-time set-password code for a user. Only the
 // SHA-256 of the code is stored; the code itself goes into the link and
-// is never persisted or logged. website selects the invite skin
-// ("admin" for plain resets).
-func (s *Store) CreateToken(username, website string, ttl time.Duration) (code string, expiresAt time.Time, err error) {
+// is never persisted or logged. website selects the page skin ("admin"
+// for the default pages).
+func (s *Store) CreateToken(username, website, kind string, ttl time.Duration) (code string, expiresAt time.Time, err error) {
 	code, err = randomToken()
 	if err != nil {
 		return "", time.Time{}, err
@@ -521,65 +530,65 @@ func (s *Store) CreateToken(username, website string, ttl time.Duration) (code s
 	ctx, cancel := withCtx()
 	defer cancel()
 	_, err = s.pool.Exec(ctx, `
-		INSERT INTO hobby_server_password_token (token_hash, username, website, expires_at)
-		VALUES ($1, $2, $3, $4)
-	`, hashCode(code), username, website, expiresAt)
+		INSERT INTO hobby_server_password_token (token_hash, username, website, kind, expires_at)
+		VALUES ($1, $2, $3, $4, $5)
+	`, hashCode(code), username, website, kind, expiresAt)
 	if err != nil {
 		return "", time.Time{}, err
 	}
 	return code, expiresAt, nil
 }
 
-// LookupToken returns the token's user/website if it is valid (exists,
-// unexpired, unused).
-func (s *Store) LookupToken(code string) (username, website string, expiresAt time.Time, ok bool, err error) {
+// LookupToken returns the token's user/website/kind if it is valid
+// (exists, unexpired, unused).
+func (s *Store) LookupToken(code string) (username, website, kind string, expiresAt time.Time, ok bool, err error) {
 	ctx, cancel := withCtx()
 	defer cancel()
 	err = s.pool.QueryRow(ctx, `
-		SELECT username, website, expires_at FROM hobby_server_password_token
+		SELECT username, website, kind, expires_at FROM hobby_server_password_token
 		WHERE token_hash = $1 AND used_at IS NULL AND expires_at > NOW()
-	`, hashCode(code)).Scan(&username, &website, &expiresAt)
+	`, hashCode(code)).Scan(&username, &website, &kind, &expiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", "", time.Time{}, false, nil
+		return "", "", "", time.Time{}, false, nil
 	}
 	if err != nil {
-		return "", "", time.Time{}, false, err
+		return "", "", "", time.Time{}, false, err
 	}
-	return username, website, expiresAt, true, nil
+	return username, website, kind, expiresAt, true, nil
 }
 
 // ConsumeToken atomically marks the token used and sets the user's
-// password hash. Returns the username and the website the token was
-// minted for ("admin" for resets), or ok=false if the token was
-// invalid (already used, expired, unknown).
-func (s *Store) ConsumeToken(code, passwordHash string) (username, website string, ok bool, err error) {
+// password hash. Returns the username, the website the token was minted
+// for and its kind, or ok=false if the token was invalid (already used,
+// expired, unknown).
+func (s *Store) ConsumeToken(code, passwordHash string) (username, website, kind string, ok bool, err error) {
 	ctx, cancel := withCtx()
 	defer cancel()
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return "", "", false, err
+		return "", "", "", false, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	err = tx.QueryRow(ctx, `
 		UPDATE hobby_server_password_token SET used_at = NOW()
 		WHERE token_hash = $1 AND used_at IS NULL AND expires_at > NOW()
-		RETURNING username, website
-	`, hashCode(code)).Scan(&username, &website)
+		RETURNING username, website, kind
+	`, hashCode(code)).Scan(&username, &website, &kind)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", "", false, nil
+		return "", "", "", false, nil
 	}
 	if err != nil {
-		return "", "", false, err
+		return "", "", "", false, err
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE hobby_server_user SET password_hash = $1 WHERE username = $2
 	`, passwordHash, username); err != nil {
-		return "", "", false, err
+		return "", "", "", false, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return "", "", false, err
+		return "", "", "", false, err
 	}
-	return username, website, true, nil
+	return username, website, kind, true, nil
 }
 
 func randomToken() (string, error) {

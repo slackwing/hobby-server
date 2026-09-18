@@ -66,10 +66,10 @@ will break the frontend. Each project has paired repos:
   project (config + `liquibase/hxh/`)
 - **bap**: feathers' `foundry/website/html/bap/` ↔ this repo's `bap`
   project (`internal/bap/` + `liquibase/bap/`)
-- **admin**: feathers' `foundry/website/html/admin/` (console +
-  reset page) and each site's `_invite/` page and `_email/` templates
-  ↔ this repo's `internal/shared/` + `internal/mailer/` +
-  `liquibase/admin/`
+- **admin**: feathers' `foundry/website/html/admin/` (console, default
+  `_invite/` + `_reset/` pages, `assets/setpw.js`) and each site's
+  `_invite/` + `_reset/` skins and `_email/` templates ↔ this repo's
+  `internal/shared/` + `internal/mailer/` + `liquibase/admin/`
 
 Check both before changing the wire format.
 

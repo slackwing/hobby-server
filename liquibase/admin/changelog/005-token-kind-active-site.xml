@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        2026-09-18, Andrew's console review:
+
+          - password tokens carry a kind ("invite" | "reset") so a reset
+            link can live on a website's own /_reset/ page without being
+            mistaken for an invite (which fires the account-created email).
+            Existing rows: website "admin" was the old reset skin.
+          - users get an active_site: the website the console acts on for
+            that person (invite/reset links + emails). Backfilled to the
+            first website they hold a role on; andrew -> hxh, tampopo ->
+            bap per Andrew.
+          - initial shrinks to 2 characters (the avatar circle).
+    -->
+
+    <changeSet id="005-token-kind-active-site" author="admin">
+
+        <addColumn tableName="hobby_server_password_token">
+            <column name="kind" type="VARCHAR(10)" defaultValue="invite">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+        <sql>UPDATE hobby_server_password_token SET kind = 'reset' WHERE website = 'admin';</sql>
+
+        <addColumn tableName="hobby_server_user">
+            <column name="active_site" type="VARCHAR(50)"/>
+        </addColumn>
+        <addForeignKeyConstraint
+            constraintName="fk_hs_user_active_site"
+            baseTableName="hobby_server_user" baseColumnNames="active_site"
+            referencedTableName="hobby_server_websites" referencedColumnNames="website"
+            onDelete="SET NULL"/>
+        <sql>
+            UPDATE hobby_server_user u
+               SET active_site = (SELECT r.website FROM hobby_server_user_roles r
+                                   WHERE r.username = u.username ORDER BY r.website LIMIT 1);
+            UPDATE hobby_server_user SET active_site = 'hxh' WHERE username = 'andrew';
+            UPDATE hobby_server_user SET active_site = 'bap' WHERE username = 'tampopo';
+            UPDATE hobby_server_user SET initial = LEFT(initial, 2);
+        </sql>
+
+        <modifyDataType tableName="hobby_server_user" columnName="initial" newDataType="VARCHAR(2)"/>
+
+    </changeSet>
+
+</databaseChangeLog>

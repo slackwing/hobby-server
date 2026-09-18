@@ -20,5 +20,6 @@
     <include file="changelog/002-shared-auth-seed.xml"/>
     <include file="changelog/003-bap-website.xml"/>
     <include file="changelog/004-user-profile.xml"/>
+    <include file="changelog/005-token-kind-active-site.xml"/>
 
 </databaseChangeLog>

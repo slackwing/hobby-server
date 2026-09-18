@@ -215,7 +215,7 @@ func main() {
 	if adminProject != nil {
 		// Server-wide SMTP sender for templated emails (invites,
 		// welcomes). Unconfigured = the console's send buttons 503.
-		email := shared.Email{
+		email := &shared.Email{
 			Mailer: mailer.Mailer{
 				Host: cfg.Email.SMTPHost, Port: cfg.Email.SMTPPort,
 				Username: cfg.Email.Username, Password: cfg.Email.Password,

@@ -1,22 +1,25 @@
 # Shared auth — integration guide for new websites
 
 How to give any new andrewcheong.com website login, users, roles,
-invite links, and templated email WITHOUT building any of it. One
-account per person works across all sites. Read this before wiring a
-new project; the implementation lives in `internal/shared/` (backend),
-`internal/mailer/` (SMTP), and feathers `html/admin/` (console).
+invite / password-reset links, and templated email WITHOUT building
+any of it. One account per person works across all sites. Read this
+before wiring a new project; the implementation lives in
+`internal/shared/` (backend), `internal/mailer/` (SMTP), and feathers
+`html/admin/` (console, default pages, shared page machinery).
 
 ## The model
 
 - **One user table for everything**: `hobby_server_user`
   (`username` = immutable id, e.g. `andrew`; `display_name`;
-  `initial` 1–3 chars and `color` #rrggbb for the circular initials
-  avatar; `email` optional; `password_hash` argon2id, NULL until set
-  via an invite/reset link). All profile fields are set by the admin
-  in the console — there is no user-facing profile page yet. A new
-  user gets a random avatar colour (random hue, fixed
+  `initial` 1–2 chars and `color` #rrggbb for the circular initials
+  avatar; `email` optional; `active_site` — the website the console
+  acts on for this person (invite/reset links and emails go to that
+  site's pages and templates); `password_hash` argon2id, NULL until
+  set via an invite/reset link). All profile fields are set by the
+  admin in the console — there is no user-facing profile page yet.
+  A new user gets a random avatar colour (random hue, fixed
   saturation/lightness — `shared.RandomColor`, mirrored in the console
-  JS) which the admin can change with a colour picker.
+  JS) and initials from the first two words of the display name.
 - **Roles are per-website**: `hobby_server_user_roles` holds
   (username, website, role) string triplets. What a role MEANS is up
   to each site. Available roles per site: `hobby_server_website_roles`;
@@ -33,79 +36,92 @@ new project; the implementation lives in `internal/shared/` (backend),
 Public:
 - `POST /admin/api/login` `{username, password}` → sets cookie,
   returns the me-payload `{username, display_name, initial, color,
-  email, roles: [{website, role}]}`
+  email, active_site, roles: [{website, role}]}`
 - `POST /admin/api/logout`
 - `GET /admin/api/me` → me-payload; 401 when logged out
 - `GET /admin/api/token-info?code=...` → `{username, display_name,
-  website, expires_at}` for a valid invite/reset code
+  website, kind, expires_at}` for a valid code; `kind` is `invite` or
+  `reset`
 - `POST /admin/api/set-password` `{code, password}` → sets password,
-  consumes code, logs the user in (returns the me-payload). If the
-  code was an invite and the site has an `"on": "accept"` email
-  template, it is sent afterwards (best effort).
-
-Logged-in:
-- `POST /admin/api/password` `{password}` → replaces the session
-  user's password, no link needed (what `/<site>/_invite/` does when
-  opened without a code).
+  consumes code, logs the user in (returns the me-payload). For an
+  invite code, the site's `"on": "accept"` email (account created) is
+  sent afterwards; a reset code sends nothing.
+- `POST /admin/api/forgot` `{username}` → always 204. If the account
+  has an email and its active site has a reset template, the reset
+  email goes out. One request per username per minute.
 
 Admin-only (requires role `admin` on website `admin`):
 - `GET /admin/api/users` → `[{username, display_name, initial, color,
-  email, has_password, created_at, roles}]`
+  email, active_site, has_password, created_at, roles}]`
 - `POST /admin/api/users` `{username, display_name, initial?, color?,
-  email?}` — missing initial = first letter of display name; missing
-  colour = random
+  email?, active_site?}` — missing initial = first letters of the first
+  two words; missing colour = random
 - `PATCH /admin/api/users/{username}` any of `{display_name, initial,
-  color, email}` (`email: ""` clears it)
+  color, email, active_site}` (`""` clears email / active_site)
 - `DELETE /admin/api/users/{username}` (cascades roles, sessions, and
   pending links; self-delete refused)
 - `GET /admin/api/websites`
 - `POST/DELETE /admin/api/roles` `{username, website, role}`
-- `POST /admin/api/links` `{username, type: "reset"}` or
-  `{username, type: "invite", website: "<site>"}` → `{url, expires_at}`
+- `POST /admin/api/links` `{username, type: "invite" | "reset",
+  website?}` → `{url, expires_at}`. `website` defaults to the user's
+  active site (invite needs one; reset falls back to the default
+  page). Invite 7 days, reset 1 hour.
 - `GET /admin/api/email-status` → `{configured, from}`
-- `POST /admin/api/email` `{username, website, template}` → renders
+- `POST /admin/api/email` `{username, template, website?}` → renders
   the site's `_email/<template>.html` for that user and sends it;
-  returns `{to, subject, template, invite_url?, expires_at?}`. 503 when
-  email is not configured, 400 when the user has no email, 404 for an
-  unknown template.
+  `website` defaults to the active site. Returns `{to, subject,
+  template, url?, expires_at?}` (the minted link for invite/reset
+  templates). 503 when email is not configured, 400 when the user has
+  no email, 404 for an unknown template.
 
-Validation: initial 1–3 non-blank chars; colour `#rrggbb`; email a
-bare address (`name@host`), max 254.
+Validation: initial 1–2 non-blank chars; colour `#rrggbb`; email a
+bare address (`name@host`), max 254; active_site must be a registered
+website.
 
 ## Cross-project standard paths (the underscore convention)
 
 Files and directories that every website provides in the SAME place,
 because the shared system (console, server) reaches into them by
-convention, are named with a leading underscore. Today:
+convention, are named with a leading underscore:
 
-- `/<website>/_invite/` — the site's invite/set-password page.
-  Invite links point here (`?code=...`).
-- `/<website>/_email/` — the site's email templates (manifest +
-  bodies), fetched by the server when the console sends mail, and an
-  admin-only preview page.
+- `/<website>/_invite/` — the site's invite page (choose a password).
+- `/<website>/_reset/` — the site's password-reset page.
+- `/<website>/_email/` — the site's email templates (manifest, layout,
+  bodies) and an admin-only preview page.
+
+**Skins over shared machinery.** The set-password pages are two thin
+skins over one script, `/admin/assets/setpw.js`: the skin supplies the
+markup and styling and tags its elements with `data-pw` hooks (`form`,
+`username`, `password`, `submit`, `msg`, `nocode`, `invalid`, `done`,
+`name`, `enter`); the script reads `?code=`, checks it with
+`token-info` (the code's kind must match the page — an invite code is
+refused on `/_reset/`), fills the username, submits `set-password`, and
+switches the states. Opened without a code the page renders with the
+form disabled — a code is the only way in.
+
+**Default pages.** `/admin/_invite/` and `/admin/_reset/` are plain
+versions built on the same script. The server checks (HEAD, cached
+10 min) whether a site has its own `/<site>/_invite/` or `/_reset/`
+page and points links at the default page when it doesn't, so a new
+site needs no skin to work. The admin console itself uses
+`/admin/_reset/`.
 
 Add new cross-project files with the same prefix (`_something`), and
 document them here.
 
 ## Invite / reset links
 
-One-time codes; DB stores only the SHA-256. Reset links
-(`/admin/reset.html?code=...`, 1h TTL) and invite links
-(`/<website>/_invite/?code=...`, 7d TTL) are functionally identical —
-set a password for the username baked into the code — but invites
-are skinned per site. Re-inviting an existing user who forgot their
-password is the intended recovery path. Generate links (or send them
-by email) in the `/admin/` console.
+One-time codes carrying a kind (`invite` | `reset`) and a website; DB
+stores only the SHA-256. Invite links (`/<site>/_invite/?code=...`,
+7d) and reset links (`/<site>/_reset/?code=...`, 1h) both set a
+password for the username baked into the code; only an invite fires
+the account-created email. Generate links (copied to the clipboard) or
+send them by email from the `/admin/` console; users can request a
+reset themselves via "Forgot password?" on a site's logon (which posts
+to `/admin/api/forgot`).
 
 The invite page must make it obvious the invitee CHOOSES a password
-right there (nobody sends them one) — say "password", not
-"passphrase". Opened WITHOUT a code by a logged-in user, it shows the
-same form as a "change password" for that user (POST
-`/admin/api/password`). It should honour `?preview=invite|change|void`
-(forced state, sample data, no network side effects) so the site can
-ship `/<website>/_invite/preview.html`: an admin-only previewer in the
-plain `/admin/` console style showing all three states in an inert
-frame — the same pattern as `_email/index.html`.
+right there — say "password", not "passphrase".
 
 ## Email templates (`/<website>/_email/`)
 
@@ -116,53 +132,71 @@ time from the public site (or `email.site_base_url` in dev).
 
 - `templates.json` — manifest:
   ```json
-  { "templates": [
-    { "id": "invite",  "name": "Invite",  "subject": "You are summoned", "invite": true },
-    { "id": "welcome", "name": "Welcome", "subject": "Welcome, {{display_name}}", "on": "accept" }
-  ] }
+  { "layout": "_layout.html",
+    "templates": [
+      { "id": "invite", "name": "Invite", "subject": "You are summoned",
+        "title": "Summons", "kicker": "HUNTER ASSOCIATION · OFFICIAL SUMMONS",
+        "heading": "HUNTER×HALLOWEEN", "invite": true },
+      { "id": "account-created", "name": "Account Created", "subject": "…",
+        "title": "Account", "kicker": "…", "heading": "ACCOUNT CREATED", "on": "accept" },
+      { "id": "reset", "name": "Password Reset", "subject": "…",
+        "title": "Account", "kicker": "…", "heading": "PASSWORD RESET", "reset": true }
+    ] }
   ```
-  `invite: true` mints a fresh 7-day invite link per send (exposed as
-  `invite_url` / `expires_at`). `on: "accept"` sends the template
-  automatically when an invite for this site is accepted.
-- `<id>.html` — the body. Email-safe HTML: tables, inline styles, no
-  external CSS/fonts (web fonts don't survive Gmail). Match the site's
-  theme by hand.
-- `index.html` — admin-only preview page: lists the manifest, renders
-  each template with the logged-in admin's own values as samples in an
-  inert frame, and has a "send test to me" button
-  (`POST /admin/api/email`). Style it like the plain `/admin/` console
-  (link `/admin/assets/style.css`), NOT like the site, so the themed
-  email in the frame is obviously the email.
+  `invite: true` mints a fresh 7-day invite link per send
+  (`invite_url`); `reset: true` a 1-hour reset link (`reset_url`);
+  `on: "accept"` sends the template automatically when an invite for
+  this site is accepted. `subject`, `title`, `kicker`, `heading` are
+  raw (heading may carry HTML).
+- `_layout.html` — the ONE shared frame (title bar, kicker, heading,
+  footer, container) with slots `{{title}}`, `{{kicker}}`,
+  `{{heading}}`, `{{body}}` (plus `{{subject}}`, `{{year}}`, any
+  variable). Change the frame here, once, for every email. Set
+  `"layout": ""` in the manifest to opt out.
+- `<id>.html` — the body fragment that goes into `{{body}}`.
+  Email-safe HTML: tables, inline styles, no external CSS/fonts (web
+  fonts don't survive Gmail).
+- `index.html` — admin-only preview page: tabs for the manifest, the
+  rendered email in an inert frame, "send test to me". Style it like
+  the plain `/admin/` console (link `/admin/assets/style.css`), NOT
+  like the site, so the themed email in the frame is obviously the
+  email. Honour `?template=<id>` and `?user=<username>` (the console's
+  Preview button opens `/<site>/_email/?template=…&user=…`; previewing
+  as another user needs the console role and falls back to yourself).
 
-Variables, substituted as `{{name}}` (HTML-escaped in bodies, raw in
-subjects; unknown names become empty): `display_name`, `username`,
-`initial`, `color`, `color_text` (ink or cream, whichever reads on
-`color`), `email`, `website`, `site_url` (`<base>/<website>/`),
-`base_url`, `invite_url`, `expires_at` (e.g. "Thu, Sep 24"; both only
-for invite templates), `year`. The server's substitution lives in
-`internal/shared/email.go`; the preview page reimplements it in JS —
-keep the variable list identical in both when extending it.
+Variables, substituted as `{{name}}` (HTML-escaped in bodies and the
+layout except the four slots, raw in the manifest strings; unknown
+names become empty): `display_name`, `username`, `initial`, `color`,
+`color_text` (ink or cream, whichever reads on `color`), `email`,
+`website`, `site_url` (`<base>/<website>/`), `base_url`, `invite_url`,
+`reset_url`, `expires_at` (invite: "Fri, Sep 25"; reset: "Fri, Sep 18
+at 5:20 PM EDT" — America/New_York), `year`. The server's substitution
+lives in `internal/shared/email.go`; the preview page reimplements it
+in JS — keep the variable list identical in both when extending it.
 
 Sending needs the server-wide `email:` block in
 `~/.config/hobby-server/config.yaml` (see `config.example.yaml`; any
 STARTTLS submission host, e.g. Gmail with an app password). Without
-it the console shows "email not configured" and sends 503.
+it the console says "email not configured" and sends 503.
 
 ## Frontend integration recipe (what hxh does)
 
 1. On page load `fetch("/admin/api/me")`. 401 → show a login form
-   that POSTs to `/admin/api/login`. 200 → show the site; gate
-   admin-only UI on `roles` containing `{website: "<site>", role: "admin"}`.
+   that POSTs to `/admin/api/login` (with a "Forgot password?" that
+   POSTs `/admin/api/forgot`). 200 → show the site; gate admin-only UI
+   on `roles` containing `{website: "<site>", role: "admin"}`.
    (Client-side gating is UX, not security — protect DATA in APIs.)
    Use `initial`/`color` for the user's avatar if the site shows one.
-2. Copy `html/hxh/_invite/index.html` (feathers repo) and reskin it
-   for the new site. Keep: readonly `username` field
-   (autocomplete=username), `new-password` field, `token-info` prefill,
-   `set-password` POST, the no-code "change password" mode, and copy
-   that says the user picks the password.
-3. Copy `html/hxh/_email/` (manifest, `invite.html`, `welcome.html`,
-   `index.html`) and reskin. Keep the ids `invite` and `welcome`.
-4. Server-side, gate project endpoints with the shared store — see
+2. Optionally skin `_invite/` and `_reset/`: copy `html/hxh/_invite/`,
+   `html/hxh/_reset/` and `html/hxh/pwpage.js` (feathers) and restyle;
+   keep the `data-pw` hooks and load `/admin/assets/setpw.js`. Without
+   a skin, links use the default pages.
+3. Copy `html/hxh/_email/` (manifest, `_layout.html`, `invite.html`,
+   `account-created.html`, `reset.html`, `index.html`) and reskin. Keep
+   the ids and the `invite` / `reset` / `on: accept` flags.
+4. Register the website (below) and set users' active site to it in
+   the console.
+5. Server-side, gate project endpoints with the shared store — see
    `internal/hxh/hxh.go` `requireHxhAdmin` (resolve `hobby_session`
    cookie via `shared.Store.GetSession`, then `HasRole(user, site, role)`).
 
@@ -172,24 +206,28 @@ it the console shows "email not configured" and sends 503.
    `liquibase/admin/`): add a row to `hobby_server_websites` and its
    roles to `hobby_server_website_roles`. (No console UI for this yet
    — changeset or psql.)
-2. Grant roles to users in the console; send invite links or emails.
+2. Grant roles to users in the console; set their active site; send
+   invites.
 3. If the site needs its own backend data, add a hobby-server project
    per `ARCHITECTURE.md` §7 — tables prefixed `<project>_` (AGENTS.md
    N7) — and gate handlers via the shared store as above.
 
 ## Ops notes
 
-- Argon2id (OWASP params) via `internal/shared/password.go`; min
-  password length 8, no composition rules — by design, don't add any.
+- Argon2id (OWASP params: 19 MiB, t=2, p=1, 16-byte salt) via
+  `internal/shared/password.go`; min password length 8, no composition
+  rules — by design, don't add any. The invite email's footnote
+  describes exactly this; keep them in sync.
 - Never log codes, passwords, hashes, or the SMTP password (AGENTS.md
   N4). The mailer scrubs its password from SMTP error strings.
 - Bootstrapping a user who can't log in: insert a token row directly
   (see CLAUDE.md "Querying the prod DB"): token = 32 random bytes
   base64url; store `sha256hex(token)` in `hobby_server_password_token`
-  with username/website/expiry; hand the user
-  `/admin/reset.html?code=<token>`.
+  with username/website/kind='reset'/expiry; hand the user
+  `/admin/_reset/?code=<token>`.
 - Local end-to-end testing: a throwaway Postgres (`docker run
   postgres:16-alpine` on a spare port) + the admin Liquibase changelog
   + a dev config with `email.smtp_host: 127.0.0.1`, `smtp_port: 1025`
   (any SMTP sink) and `site_base_url` pointing at a local static
-  server that serves the feathers `html/` tree.
+  server that serves the feathers `html/` tree and proxies
+  `/admin/api/*` to the Go server.
