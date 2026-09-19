@@ -1,0 +1,170 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        Roster DB (2026-09-19) — the curated character base, built ONE
+        character at a time by the hxh-character skill (feathers
+        .claude/skills/hxh-character) and reviewed by hand in the admin
+        page /hxh/roster/. A fresh start: the 2026-09-17 tables
+        (hxh_characters / hxh_arcs, mirrored from roster.json) stay as
+        a source to check against and are not touched here.
+
+          - hxh_char: one row per character; id is the character
+            number. Lists (nen_types, arcs, arms) are comma-separated
+            slugs in one column, Andrew's simplicity preference.
+            status: pending (inserted by the skill, awaiting review),
+            approved, rejected. avatar_image_id / card_image_id point
+            at the chosen 1:1 and 2:3 crops. notes = the skill's
+            sources and judgment calls, for the reviewer.
+          - hxh_char_image: every picture, GLOBAL id. type is raw
+            (found or uploaded), cropped, pixelated, upscaled or
+            transparent; source_image_id says what it was made from.
+            data is the image itself, thumb a small server-made
+            preview so galleries never pull full blobs. sha256 dedupes
+            per character (the same still may be a raw for two
+            characters). status kept|rejected: a rejected raw keeps
+            its row so a rerun of the skill never refetches it.
+    -->
+
+    <changeSet id="006-roster-db" author="hxh">
+
+        <createTable tableName="hxh_char">
+            <column name="id" type="BIGINT" autoIncrement="true">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="slug" type="VARCHAR(50)">
+                <constraints nullable="false" unique="true" uniqueConstraintName="uq_hxh_char_slug"/>
+            </column>
+            <column name="name" type="VARCHAR(100)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="name_ja" type="VARCHAR(100)" defaultValue="">
+                <constraints nullable="false"/>
+            </column>
+            <column name="first" type="VARCHAR(20)" defaultValue="">
+                <constraints nullable="false"/>
+            </column>
+            <column name="rank" type="VARCHAR(1)" defaultValue="C">
+                <constraints nullable="false"/>
+            </column>
+            <column name="nen_types" type="VARCHAR(120)" defaultValue="">
+                <constraints nullable="false"/>
+            </column>
+            <column name="affiliation" type="VARCHAR(60)" defaultValue="">
+                <constraints nullable="false"/>
+            </column>
+            <column name="arcs" type="TEXT" defaultValue="">
+                <constraints nullable="false"/>
+            </column>
+            <column name="arms" type="TEXT" defaultValue="">
+                <constraints nullable="false"/>
+            </column>
+            <column name="description" type="TEXT" defaultValue="">
+                <constraints nullable="false"/>
+            </column>
+            <column name="notes" type="TEXT" defaultValue="">
+                <constraints nullable="false"/>
+            </column>
+            <column name="status" type="VARCHAR(10)" defaultValue="pending">
+                <constraints nullable="false"/>
+            </column>
+            <column name="avatar_image_id" type="BIGINT"/>
+            <column name="card_image_id" type="BIGINT"/>
+            <column name="created_by" type="VARCHAR(50)" defaultValue="">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <createTable tableName="hxh_char_image">
+            <column name="id" type="BIGINT" autoIncrement="true">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="char_id" type="BIGINT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="type" type="VARCHAR(12)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="source_image_id" type="BIGINT"/>
+            <column name="mime" type="VARCHAR(30)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="width" type="INT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="height" type="INT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="data" type="BYTEA">
+                <constraints nullable="false"/>
+            </column>
+            <column name="thumb" type="BYTEA">
+                <constraints nullable="false"/>
+            </column>
+            <column name="thumb_mime" type="VARCHAR(30)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="sha256" type="CHAR(64)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="source_url" type="TEXT" defaultValue="">
+                <constraints nullable="false"/>
+            </column>
+            <column name="caption" type="VARCHAR(200)" defaultValue="">
+                <constraints nullable="false"/>
+            </column>
+            <column name="status" type="VARCHAR(10)" defaultValue="kept">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_by" type="VARCHAR(50)" defaultValue="">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <addForeignKeyConstraint
+            constraintName="fk_hxh_char_image_char"
+            baseTableName="hxh_char_image" baseColumnNames="char_id"
+            referencedTableName="hxh_char" referencedColumnNames="id"
+            onDelete="CASCADE"/>
+        <addForeignKeyConstraint
+            constraintName="fk_hxh_char_image_source"
+            baseTableName="hxh_char_image" baseColumnNames="source_image_id"
+            referencedTableName="hxh_char_image" referencedColumnNames="id"
+            onDelete="SET NULL"/>
+        <addForeignKeyConstraint
+            constraintName="fk_hxh_char_avatar"
+            baseTableName="hxh_char" baseColumnNames="avatar_image_id"
+            referencedTableName="hxh_char_image" referencedColumnNames="id"
+            onDelete="SET NULL"/>
+        <addForeignKeyConstraint
+            constraintName="fk_hxh_char_card"
+            baseTableName="hxh_char" baseColumnNames="card_image_id"
+            referencedTableName="hxh_char_image" referencedColumnNames="id"
+            onDelete="SET NULL"/>
+
+        <addUniqueConstraint tableName="hxh_char_image" columnNames="char_id, sha256" constraintName="uq_hxh_char_image_sha"/>
+        <createIndex tableName="hxh_char_image" indexName="idx_hxh_char_image_char_type">
+            <column name="char_id"/>
+            <column name="type"/>
+            <column name="created_at"/>
+        </createIndex>
+        <createIndex tableName="hxh_char" indexName="idx_hxh_char_status">
+            <column name="status"/>
+        </createIndex>
+
+    </changeSet>
+
+</databaseChangeLog>

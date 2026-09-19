@@ -201,6 +201,7 @@ func Mount(r chi.Router, store *Store, auth *shared.Store) {
 		g.Get("/roster", handleRoster(store))
 		g.Put("/roster/characters", handlePutCharacters(store))
 	})
+	MountRosterDB(r, store, auth) // the curated character base, rosterdb.go
 }
 
 func requireHxhAdmin(auth *shared.Store) func(http.Handler) http.Handler {

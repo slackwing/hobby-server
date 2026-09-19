@@ -85,6 +85,16 @@ state, etc.) as needed.
   project, never edit landed changesets). Table names carry the
   project prefix (`hxh_characters`, not `characters`) — see
   AGENTS.md N7; rv's unprefixed tables are grandfathered.
+- `internal/hxh/rosterdb.go` — the Roster DB (2026-09-19): the curated
+  character base built one character at a time by the feathers
+  `hxh-character` skill and reviewed at `/hxh/roster/`. Tables
+  `hxh_char` + `hxh_char_image` (changeset 006; pictures are BYTEA
+  with a server-made thumb, typed raw/cropped/pixelated/upscaled/
+  transparent with `source_image_id` lineage). API `/api/hxh/db/*`;
+  writes need hxh admin, picture reads any hxh role; the server does
+  the cropping (exact source pixels, PNG). Pure parts tested in
+  `rosterdb_test.go`. The 2026-09-17 `hxh_characters` roster tables
+  stay as a cross-check source.
 - `internal/hxh/chat.go` + `hub.go` — the chat endpoints, profile-run
   validation and the WebSocket hub (tests: `hub_test.go`, `go test
   ./internal/hxh/`). Presence lives in the SHARED user table:

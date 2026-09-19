@@ -15,5 +15,6 @@
     <include file="changelog/003-roster.xml"/>
     <include file="changelog/004-character-card-fields.xml"/>
     <include file="changelog/005-chat.xml"/>
+    <include file="changelog/006-roster-db.xml"/>
 
 </databaseChangeLog>
