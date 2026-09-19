@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        Owners (Andrew, 2026-09-19): whoever made a thing owns it — the
+        skill (the shared-auth bot user "claude") for the pictures it
+        finds, Andrew or Abi for uploads, crops and verdicts. One name
+        for all three tables: created_by / reviewer become owner.
+    -->
+
+    <changeSet id="007-owners" author="hxh">
+        <renameColumn tableName="hxh_char" oldColumnName="created_by" newColumnName="owner" columnDataType="VARCHAR(50)"/>
+        <renameColumn tableName="hxh_char_image" oldColumnName="created_by" newColumnName="owner" columnDataType="VARCHAR(50)"/>
+        <renameColumn tableName="hxh_char_review" oldColumnName="reviewer" newColumnName="owner" columnDataType="VARCHAR(50)"/>
+    </changeSet>
+
+</databaseChangeLog>

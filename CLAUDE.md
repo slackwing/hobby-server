@@ -92,14 +92,17 @@ state, etc.) as needed.
   the id is the number, the name the handle; `version` bumps on every
   change to the character or its pictures; `review_status` pending /
   accepted / rejected with `review_reason`), `hxh_char_image`
-  (BYTEA + server-made thumb, typed raw/cropped/pixelated/upscaled/
-  transparent with `source_image_id` lineage; sha256 unique per
-  character so a rejected raw is remembered) and `hxh_char_review`
-  (the verdict log, per version) — changeset 006. API
-  `/api/hxh/db/*`; writes need hxh admin, picture reads any hxh role;
-  `POST /chars/{id}/review` passes a verdict (a rejection needs a
-  reason) and never bumps the version; the server does the cropping
-  (exact source pixels, PNG). Pure parts tested in `rosterdb_test.go`.
+  (BYTEA + server-made thumb, typed raw = "Random" (found by the
+  skill) / uploaded / cropped / pixelated / upscaled / transparent with
+  `source_image_id` lineage; sha256 unique per character) and
+  `hxh_char_review` (the verdict log, per version) — changesets 006
+  and 007 (`owner` on all three tables: the bot user `claude` for what
+  the skill finds, Andrew/Abi for uploads, crops and verdicts). API
+  `/api/hxh/db/*`; writes need hxh admin OR the site-wide `admin` role
+  (how `claude` writes without an hxh role), picture reads any hxh
+  role; `POST /chars/{id}/review` passes a verdict (reason optional)
+  and never bumps the version; the server does the cropping (exact
+  source pixels, PNG). Pure parts tested in `rosterdb_test.go`.
   The 2026-09-17 `hxh_characters` roster tables stay as a cross-check
   source.
 - `internal/hxh/chat.go` + `hub.go` — the chat endpoints, profile-run

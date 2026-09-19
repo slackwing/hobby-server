@@ -62,7 +62,7 @@ import (
 
 // Vocabularies. Lists are stored comma-joined (see splitSlugs/joinSlugs).
 var (
-	ImageTypes = []string{"raw", "cropped", "pixelated", "upscaled", "transparent"}
+	ImageTypes = []string{"raw", "uploaded", "cropped", "pixelated", "upscaled", "transparent"}
 	NenTypes   = []string{"enhancement", "transmutation", "conjuration", "emission", "manipulation", "specialization"}
 	ArcSlugs   = []string{"hunter-exam", "zoldyck-family", "heavens-arena", "yorknew-city", "greed-island", "chimera-ant", "chairman-election"}
 	Ranks      = []string{"S", "A", "B", "C"}
@@ -98,7 +98,7 @@ type Char struct {
 	ReviewReason  string    `json:"review_reason"`
 	AvatarImageID *int64    `json:"avatar_image_id"`
 	CardImageID   *int64    `json:"card_image_id"`
-	CreatedBy     string    `json:"created_by"`
+	Owner         string    `json:"owner"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
 	ImageCount    int       `json:"image_count"`
@@ -113,7 +113,7 @@ type Review struct {
 	Version   int       `json:"version"`
 	Status    string    `json:"status"`
 	Reason    string    `json:"reason"`
-	Reviewer  string    `json:"reviewer"`
+	Owner     string    `json:"owner"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -130,7 +130,7 @@ type Image struct {
 	SourceURL     string    `json:"source_url"`
 	Caption       string    `json:"caption"`
 	Status        string    `json:"status"`
-	CreatedBy     string    `json:"created_by"`
+	Owner         string    `json:"owner"`
 	CreatedAt     time.Time `json:"created_at"`
 }
 
@@ -319,14 +319,14 @@ func isUnique(err error) bool {
 }
 
 const charCols = `c.id, c.name, c.name_ja, c.first, c.rank, c.nen_types, c.affiliation, c.arcs, c.arms,
-	c.description, c.notes, c.version, c.review_status, c.review_reason, c.avatar_image_id, c.card_image_id, c.created_by, c.created_at, c.updated_at,
+	c.description, c.notes, c.version, c.review_status, c.review_reason, c.avatar_image_id, c.card_image_id, c.owner, c.created_at, c.updated_at,
 	(SELECT count(*) FROM hxh_char_image i WHERE i.char_id = c.id AND i.status = 'kept')`
 
 func scanChar(row pgx.Row) (*Char, error) {
 	var c Char
 	var nen, arcs, arms string
 	if err := row.Scan(&c.ID, &c.Name, &c.NameJA, &c.First, &c.Rank, &nen, &c.Affiliation, &arcs, &arms,
-		&c.Description, &c.Notes, &c.Version, &c.ReviewStatus, &c.ReviewReason, &c.AvatarImageID, &c.CardImageID, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt,
+		&c.Description, &c.Notes, &c.Version, &c.ReviewStatus, &c.ReviewReason, &c.AvatarImageID, &c.CardImageID, &c.Owner, &c.CreatedAt, &c.UpdatedAt,
 		&c.ImageCount); err != nil {
 		return nil, err
 	}
@@ -381,7 +381,7 @@ func (s *Store) GetChar(id int64) (*Char, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	rv, err := s.pool.Query(ctx, `SELECT id, char_id, version, status, reason, reviewer, created_at FROM hxh_char_review
+	rv, err := s.pool.Query(ctx, `SELECT id, char_id, version, status, reason, owner, created_at FROM hxh_char_review
 		WHERE char_id = $1 ORDER BY created_at DESC, id DESC`, id)
 	if err != nil {
 		return nil, err
@@ -390,7 +390,7 @@ func (s *Store) GetChar(id int64) (*Char, error) {
 	c.Reviews = []Review{}
 	for rv.Next() {
 		var r Review
-		if err := rv.Scan(&r.ID, &r.CharID, &r.Version, &r.Status, &r.Reason, &r.Reviewer, &r.CreatedAt); err != nil {
+		if err := rv.Scan(&r.ID, &r.CharID, &r.Version, &r.Status, &r.Reason, &r.Owner, &r.CreatedAt); err != nil {
 			return nil, err
 		}
 		c.Reviews = append(c.Reviews, r)
@@ -404,15 +404,13 @@ func (s *Store) bump(ctx context.Context, charID int64) error {
 	return err
 }
 
-// Review records a verdict on the character's current version.
-func (s *Store) Review(id int64, status, reason, reviewer string) (*Char, error) {
+// Review records a verdict on the character's current version. A
+// rejection may carry a reason (Andrew, 2026-09-19: optional).
+func (s *Store) Review(id int64, status, reason, owner string) (*Char, error) {
 	if !in(CharStatus, status) {
 		return nil, fmt.Errorf("%w: status must be pending, accepted or rejected", ErrBadInput)
 	}
 	reason = strings.TrimSpace(reason)
-	if status == "rejected" && reason == "" {
-		return nil, fmt.Errorf("%w: a rejection needs a reason", ErrBadInput)
-	}
 	if status != "rejected" {
 		reason = ""
 	}
@@ -431,8 +429,8 @@ func (s *Store) Review(id int64, status, reason, reviewer string) (*Char, error)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO hxh_char_review (char_id, version, status, reason, reviewer) VALUES ($1, $2, $3, $4, $5)`,
-		id, version, status, reason, reviewer); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO hxh_char_review (char_id, version, status, reason, owner) VALUES ($1, $2, $3, $4, $5)`,
+		id, version, status, reason, owner); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -457,10 +455,10 @@ func (s *Store) CreateChar(c Char) (*Char, error) {
 	defer cancel()
 	var id int64
 	err := s.pool.QueryRow(ctx, `INSERT INTO hxh_char
-		(name, name_ja, first, rank, nen_types, affiliation, arcs, arms, description, notes, created_by)
+		(name, name_ja, first, rank, nen_types, affiliation, arcs, arms, description, notes, owner)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
 		c.Name, c.NameJA, c.First, c.Rank, joinSlugs(c.NenTypes), c.Affiliation,
-		joinSlugs(c.Arcs), joinSlugs(c.Arms), c.Description, c.Notes, c.CreatedBy).Scan(&id)
+		joinSlugs(c.Arcs), joinSlugs(c.Arms), c.Description, c.Notes, c.Owner).Scan(&id)
 	if err != nil {
 		return nil, err
 	}
@@ -613,12 +611,12 @@ func (s *Store) DeleteChar(id int64) error {
 }
 
 const imageCols = `i.id, i.char_id, i.type, i.source_image_id, i.mime, i.width, i.height, length(i.data), i.sha256,
-	i.source_url, i.caption, i.status, i.created_by, i.created_at`
+	i.source_url, i.caption, i.status, i.owner, i.created_at`
 
 func scanImage(row pgx.Row) (*Image, error) {
 	var im Image
 	if err := row.Scan(&im.ID, &im.CharID, &im.Type, &im.SourceImageID, &im.Mime, &im.Width, &im.Height, &im.Bytes,
-		&im.SHA256, &im.SourceURL, &im.Caption, &im.Status, &im.CreatedBy, &im.CreatedAt); err != nil {
+		&im.SHA256, &im.SourceURL, &im.Caption, &im.Status, &im.Owner, &im.CreatedAt); err != nil {
 		return nil, err
 	}
 	im.SHA256 = strings.TrimSpace(im.SHA256)
@@ -677,7 +675,7 @@ func (s *Store) AddImage(charID int64, typ string, sourceID *int64, sourceURL, c
 	}
 	var id int64
 	err = s.pool.QueryRow(ctx, `INSERT INTO hxh_char_image
-		(char_id, type, source_image_id, mime, width, height, data, thumb, thumb_mime, sha256, source_url, caption, created_by)
+		(char_id, type, source_image_id, mime, width, height, data, thumb, thumb_mime, sha256, source_url, caption, owner)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
 		charID, typ, sourceID, d.mime, d.width, d.height, data, d.thumb, d.thumbMime, d.sha, sourceURL, caption, by).Scan(&id)
 	if isUnique(err) {
@@ -764,8 +762,10 @@ func (s *Store) CropImage(id int64, rect CropRect, by string) (*Image, bool, err
 // ---- handlers ----
 
 // requireHxh resolves the shared session and, with admin=true, insists on
-// role admin for hxh; otherwise any hxh role will do. The username lands
-// in the request context (ctxUser / userOf, shared with chat.go).
+// role admin for hxh; otherwise any hxh role will do. A site-wide admin
+// (role admin on the "admin" website — e.g. the skill's bot user
+// "claude") passes either check. The username lands in the request
+// context (ctxUser / userOf, shared with chat.go).
 func requireHxh(auth *shared.Store, admin bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -779,11 +779,13 @@ func requireHxh(auth *shared.Store, admin bool) func(http.Handler) http.Handler 
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
 			}
-			var allowed bool
-			if admin {
-				allowed, err = auth.HasRole(username, "hxh", "admin")
-			} else {
-				allowed, err = auth.IsMember(username, "hxh")
+			allowed, err := auth.HasRole(username, "admin", "admin")
+			if err == nil && !allowed {
+				if admin {
+					allowed, err = auth.HasRole(username, "hxh", "admin")
+				} else {
+					allowed, err = auth.IsMember(username, "hxh")
+				}
 			}
 			if err != nil {
 				log.Printf("[hxh db] role check error: %v", err)
@@ -861,7 +863,7 @@ func handleCreateChar(store *Store) http.HandlerFunc {
 			fail(w, fmt.Errorf("%w: bad json", ErrBadInput), "create")
 			return
 		}
-		c.CreatedBy = userOf(r)
+		c.Owner = userOf(r)
 		out, err := store.CreateChar(c)
 		if err != nil {
 			fail(w, err, "create char")
