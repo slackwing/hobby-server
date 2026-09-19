@@ -82,28 +82,29 @@ var (
 )
 
 type Char struct {
-	ID            int64     `json:"id"`
-	Name          string    `json:"name"`
-	NameJA        string    `json:"name_ja"`
-	First         string    `json:"first"`
-	Rank          string    `json:"rank"`
-	NenTypes      []string  `json:"nen_types"`
-	Affiliation   string    `json:"affiliation"`
-	Arcs          []string  `json:"arcs"`
-	Arms          []string  `json:"arms"`
-	Description   string    `json:"description"`
-	Notes         string    `json:"notes"`
-	Version       int       `json:"version"`
-	ReviewStatus  string    `json:"review_status"`
-	ReviewReason  string    `json:"review_reason"`
-	AvatarImageID *int64    `json:"avatar_image_id"`
-	CardImageID   *int64    `json:"card_image_id"`
-	Owner         string    `json:"owner"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
-	ImageCount    int       `json:"image_count"`
-	Images        []Image   `json:"images,omitempty"`
-	Reviews       []Review  `json:"reviews,omitempty"`
+	ID            int64          `json:"id"`
+	Name          string         `json:"name"`
+	NameJA        string         `json:"name_ja"`
+	First         string         `json:"first"`
+	Rank          string         `json:"rank"`
+	NenTypes      []string       `json:"nen_types"`
+	Affiliation   string         `json:"affiliation"`
+	Arcs          []string       `json:"arcs"`
+	Arms          []string       `json:"arms"`
+	Description   string         `json:"description"`
+	Notes         string         `json:"notes"`
+	Version       int            `json:"version"`
+	ReviewStatus  string         `json:"review_status"`
+	ReviewReason  string         `json:"review_reason"`
+	AvatarImageID *int64         `json:"avatar_image_id"`
+	CardImageID   *int64         `json:"card_image_id"`
+	Owner         string         `json:"owner"`
+	CreatedAt     time.Time      `json:"created_at"`
+	UpdatedAt     time.Time      `json:"updated_at"`
+	ImageCount    int            `json:"image_count"`
+	ImageCounts   map[string]int `json:"image_counts"` // per type, for the list's Pics column
+	Images        []Image        `json:"images,omitempty"`
+	Reviews       []Review       `json:"reviews,omitempty"`
 }
 
 // Review is one verdict from the log.
@@ -320,17 +321,25 @@ func isUnique(err error) bool {
 
 const charCols = `c.id, c.name, c.name_ja, c.first, c.rank, c.nen_types, c.affiliation, c.arcs, c.arms,
 	c.description, c.notes, c.version, c.review_status, c.review_reason, c.avatar_image_id, c.card_image_id, c.owner, c.created_at, c.updated_at,
-	(SELECT count(*) FROM hxh_char_image i WHERE i.char_id = c.id AND i.status = 'kept')`
+	(SELECT count(*) FROM hxh_char_image i WHERE i.char_id = c.id),
+	COALESCE((SELECT json_object_agg(t.type, t.n) FROM (SELECT type, count(*) AS n FROM hxh_char_image i WHERE i.char_id = c.id GROUP BY type) t), '{}'::json)`
 
 func scanChar(row pgx.Row) (*Char, error) {
 	var c Char
 	var nen, arcs, arms string
+	var counts []byte
 	if err := row.Scan(&c.ID, &c.Name, &c.NameJA, &c.First, &c.Rank, &nen, &c.Affiliation, &arcs, &arms,
 		&c.Description, &c.Notes, &c.Version, &c.ReviewStatus, &c.ReviewReason, &c.AvatarImageID, &c.CardImageID, &c.Owner, &c.CreatedAt, &c.UpdatedAt,
-		&c.ImageCount); err != nil {
+		&c.ImageCount, &counts); err != nil {
 		return nil, err
 	}
 	c.NenTypes, c.Arcs, c.Arms = splitSlugs(nen), splitSlugs(arcs), splitSlugs(arms)
+	c.ImageCounts = map[string]int{}
+	if len(counts) > 0 {
+		if err := json.Unmarshal(counts, &c.ImageCounts); err != nil {
+			return nil, err
+		}
+	}
 	return &c, nil
 }
 
