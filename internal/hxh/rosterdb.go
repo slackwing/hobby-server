@@ -7,10 +7,11 @@
 //
 // Public URLs (Apache maps /hxh/api/* → /api/hxh/*):
 //
-//	GET    /hxh/api/db/chars?status=&slug=      list, no blobs
-//	POST   /hxh/api/db/chars                    create (409 on a taken slug)
-//	GET    /hxh/api/db/chars/{id}               profile + image metadata
-//	PATCH  /hxh/api/db/chars/{id}               partial update
+//	GET    /hxh/api/db/chars?status=&name=      list, no blobs (name: case-insensitive exact)
+//	POST   /hxh/api/db/chars                    create (pending, version 1)
+//	GET    /hxh/api/db/chars/{id}               profile + image metadata + review log
+//	PATCH  /hxh/api/db/chars/{id}               partial update (bumps version)
+//	POST   /hxh/api/db/chars/{id}/review        {status, reason} — the verdict on the current version
 //	DELETE /hxh/api/db/chars/{id}
 //	POST   /hxh/api/db/chars/{id}/images        upload (multipart "file" or raw body)
 //	GET    /hxh/api/db/images/{id}              the picture (any hxh role)
@@ -22,6 +23,11 @@
 //
 // Writes need role admin on hxh; reads of pictures need any hxh role
 // (the guest-facing Binder will show avatars one day).
+//
+// Versioning (Andrew, 2026-09-19): every change to a character or its
+// pictures bumps hxh_char.version; a review (accept / reject with a
+// reason / back to pending) is a verdict on the version it was passed
+// on and is logged in hxh_char_review, never bumping the version.
 package hxh
 
 import (
@@ -60,7 +66,7 @@ var (
 	NenTypes   = []string{"enhancement", "transmutation", "conjuration", "emission", "manipulation", "specialization"}
 	ArcSlugs   = []string{"hunter-exam", "zoldyck-family", "heavens-arena", "yorknew-city", "greed-island", "chimera-ant", "chairman-election"}
 	Ranks      = []string{"S", "A", "B", "C"}
-	CharStatus = []string{"pending", "approved", "rejected"}
+	CharStatus = []string{"pending", "accepted", "rejected"}
 	ImgStatus  = []string{"kept", "rejected"}
 )
 
@@ -77,7 +83,6 @@ var (
 
 type Char struct {
 	ID            int64     `json:"id"`
-	Slug          string    `json:"slug"`
 	Name          string    `json:"name"`
 	NameJA        string    `json:"name_ja"`
 	First         string    `json:"first"`
@@ -88,7 +93,9 @@ type Char struct {
 	Arms          []string  `json:"arms"`
 	Description   string    `json:"description"`
 	Notes         string    `json:"notes"`
-	Status        string    `json:"status"`
+	Version       int       `json:"version"`
+	ReviewStatus  string    `json:"review_status"`
+	ReviewReason  string    `json:"review_reason"`
 	AvatarImageID *int64    `json:"avatar_image_id"`
 	CardImageID   *int64    `json:"card_image_id"`
 	CreatedBy     string    `json:"created_by"`
@@ -96,6 +103,18 @@ type Char struct {
 	UpdatedAt     time.Time `json:"updated_at"`
 	ImageCount    int       `json:"image_count"`
 	Images        []Image   `json:"images,omitempty"`
+	Reviews       []Review  `json:"reviews,omitempty"`
+}
+
+// Review is one verdict from the log.
+type Review struct {
+	ID        int64     `json:"id"`
+	CharID    int64     `json:"char_id"`
+	Version   int       `json:"version"`
+	Status    string    `json:"status"`
+	Reason    string    `json:"reason"`
+	Reviewer  string    `json:"reviewer"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type Image struct {
@@ -299,15 +318,15 @@ func isUnique(err error) bool {
 	return errors.As(err, &pg) && pg.Code == "23505"
 }
 
-const charCols = `c.id, c.slug, c.name, c.name_ja, c.first, c.rank, c.nen_types, c.affiliation, c.arcs, c.arms,
-	c.description, c.notes, c.status, c.avatar_image_id, c.card_image_id, c.created_by, c.created_at, c.updated_at,
+const charCols = `c.id, c.name, c.name_ja, c.first, c.rank, c.nen_types, c.affiliation, c.arcs, c.arms,
+	c.description, c.notes, c.version, c.review_status, c.review_reason, c.avatar_image_id, c.card_image_id, c.created_by, c.created_at, c.updated_at,
 	(SELECT count(*) FROM hxh_char_image i WHERE i.char_id = c.id AND i.status = 'kept')`
 
 func scanChar(row pgx.Row) (*Char, error) {
 	var c Char
 	var nen, arcs, arms string
-	if err := row.Scan(&c.ID, &c.Slug, &c.Name, &c.NameJA, &c.First, &c.Rank, &nen, &c.Affiliation, &arcs, &arms,
-		&c.Description, &c.Notes, &c.Status, &c.AvatarImageID, &c.CardImageID, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt,
+	if err := row.Scan(&c.ID, &c.Name, &c.NameJA, &c.First, &c.Rank, &nen, &c.Affiliation, &arcs, &arms,
+		&c.Description, &c.Notes, &c.Version, &c.ReviewStatus, &c.ReviewReason, &c.AvatarImageID, &c.CardImageID, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt,
 		&c.ImageCount); err != nil {
 		return nil, err
 	}
@@ -315,11 +334,11 @@ func scanChar(row pgx.Row) (*Char, error) {
 	return &c, nil
 }
 
-func (s *Store) ListChars(status, slug string) ([]Char, error) {
+func (s *Store) ListChars(status, name string) ([]Char, error) {
 	ctx, cancel := withCtx()
 	defer cancel()
 	rows, err := s.pool.Query(ctx, `SELECT `+charCols+` FROM hxh_char c
-		WHERE ($1 = '' OR c.status = $1) AND ($2 = '' OR c.slug = $2) ORDER BY c.id`, status, slug)
+		WHERE ($1 = '' OR c.review_status = $1) AND ($2 = '' OR lower(c.name) = lower($2)) ORDER BY c.id`, status, strings.TrimSpace(name))
 	if err != nil {
 		return nil, err
 	}
@@ -359,22 +378,78 @@ func (s *Store) GetChar(id int64) (*Char, error) {
 		}
 		c.Images = append(c.Images, *im)
 	}
-	return c, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rv, err := s.pool.Query(ctx, `SELECT id, char_id, version, status, reason, reviewer, created_at FROM hxh_char_review
+		WHERE char_id = $1 ORDER BY created_at DESC, id DESC`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rv.Close()
+	c.Reviews = []Review{}
+	for rv.Next() {
+		var r Review
+		if err := rv.Scan(&r.ID, &r.CharID, &r.Version, &r.Status, &r.Reason, &r.Reviewer, &r.CreatedAt); err != nil {
+			return nil, err
+		}
+		c.Reviews = append(c.Reviews, r)
+	}
+	return c, rv.Err()
+}
+
+// bump counts a change to the character or its pictures.
+func (s *Store) bump(ctx context.Context, charID int64) error {
+	_, err := s.pool.Exec(ctx, `UPDATE hxh_char SET version = version + 1, updated_at = NOW() WHERE id = $1`, charID)
+	return err
+}
+
+// Review records a verdict on the character's current version.
+func (s *Store) Review(id int64, status, reason, reviewer string) (*Char, error) {
+	if !in(CharStatus, status) {
+		return nil, fmt.Errorf("%w: status must be pending, accepted or rejected", ErrBadInput)
+	}
+	reason = strings.TrimSpace(reason)
+	if status == "rejected" && reason == "" {
+		return nil, fmt.Errorf("%w: a rejection needs a reason", ErrBadInput)
+	}
+	if status != "rejected" {
+		reason = ""
+	}
+	ctx, cancel := withCtx()
+	defer cancel()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var version int
+	err = tx.QueryRow(ctx, `UPDATE hxh_char SET review_status = $2, review_reason = $3 WHERE id = $1 RETURNING version`, id, status, reason).Scan(&version)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO hxh_char_review (char_id, version, status, reason, reviewer) VALUES ($1, $2, $3, $4, $5)`,
+		id, version, status, reason, reviewer); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return s.GetChar(id)
 }
 
 func (s *Store) CreateChar(c Char) (*Char, error) {
-	if !validSlug(c.Slug) {
-		return nil, fmt.Errorf("%w: slug must be lowercase kebab-case", ErrBadInput)
-	}
-	if strings.TrimSpace(c.Name) == "" {
+	c.Name = strings.TrimSpace(c.Name)
+	if c.Name == "" {
 		return nil, fmt.Errorf("%w: name required", ErrBadInput)
 	}
 	if c.Rank == "" {
 		c.Rank = "C"
 	}
-	if c.Status == "" {
-		c.Status = "pending"
-	}
+	c.ReviewStatus = "pending"
 	if err := validateCharValues(&c); err != nil {
 		return nil, err
 	}
@@ -382,13 +457,10 @@ func (s *Store) CreateChar(c Char) (*Char, error) {
 	defer cancel()
 	var id int64
 	err := s.pool.QueryRow(ctx, `INSERT INTO hxh_char
-		(slug, name, name_ja, first, rank, nen_types, affiliation, arcs, arms, description, notes, status, created_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
-		c.Slug, strings.TrimSpace(c.Name), c.NameJA, c.First, c.Rank, joinSlugs(c.NenTypes), c.Affiliation,
-		joinSlugs(c.Arcs), joinSlugs(c.Arms), c.Description, c.Notes, c.Status, c.CreatedBy).Scan(&id)
-	if isUnique(err) {
-		return nil, fmt.Errorf("%w: slug %q is taken", ErrConflict, c.Slug)
-	}
+		(name, name_ja, first, rank, nen_types, affiliation, arcs, arms, description, notes, created_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+		c.Name, c.NameJA, c.First, c.Rank, joinSlugs(c.NenTypes), c.Affiliation,
+		joinSlugs(c.Arcs), joinSlugs(c.Arms), c.Description, c.Notes, c.CreatedBy).Scan(&id)
 	if err != nil {
 		return nil, err
 	}
@@ -399,8 +471,8 @@ func validateCharValues(c *Char) error {
 	if !in(Ranks, c.Rank) {
 		return fmt.Errorf("%w: rank must be S, A, B or C", ErrBadInput)
 	}
-	if !in(CharStatus, c.Status) {
-		return fmt.Errorf("%w: status must be pending, approved or rejected", ErrBadInput)
+	if !in(CharStatus, c.ReviewStatus) {
+		return fmt.Errorf("%w: review_status must be pending, accepted or rejected", ErrBadInput)
 	}
 	if err := validSlugList(c.NenTypes, NenTypes, 2); err != nil {
 		return fmt.Errorf("nen_types %w", err)
@@ -421,8 +493,9 @@ func validateCharValues(c *Char) error {
 
 // charPatch is the JSON body of PATCH /chars/{id}: any subset of the
 // editable fields. Unknown keys are an error so typos never pass silently.
-var patchKeys = []string{"slug", "name", "name_ja", "first", "rank", "nen_types", "affiliation", "arcs", "arms",
-	"description", "notes", "status", "avatar_image_id", "card_image_id"}
+// The review verdict is not a field — see Review.
+var patchKeys = []string{"name", "name_ja", "first", "rank", "nen_types", "affiliation", "arcs", "arms",
+	"description", "notes", "avatar_image_id", "card_image_id"}
 
 // applyPatch merges a decoded patch into c, validating as it goes.
 func applyPatch(c *Char, patch map[string]json.RawMessage) error {
@@ -470,8 +543,8 @@ func applyPatch(c *Char, patch map[string]json.RawMessage) error {
 		*dst = v
 		return nil
 	}
-	for k, dst := range map[string]*string{"slug": &c.Slug, "name": &c.Name, "name_ja": &c.NameJA, "first": &c.First,
-		"rank": &c.Rank, "affiliation": &c.Affiliation, "description": &c.Description, "notes": &c.Notes, "status": &c.Status} {
+	for k, dst := range map[string]*string{"name": &c.Name, "name_ja": &c.NameJA, "first": &c.First,
+		"rank": &c.Rank, "affiliation": &c.Affiliation, "description": &c.Description, "notes": &c.Notes} {
 		if err := str(k, dst); err != nil {
 			return err
 		}
@@ -489,9 +562,6 @@ func applyPatch(c *Char, patch map[string]json.RawMessage) error {
 	c.Name = strings.TrimSpace(c.Name)
 	if c.Name == "" {
 		return fmt.Errorf("%w: name required", ErrBadInput)
-	}
-	if !validSlug(c.Slug) {
-		return fmt.Errorf("%w: slug must be lowercase kebab-case", ErrBadInput)
 	}
 	return validateCharValues(c)
 }
@@ -518,14 +588,11 @@ func (s *Store) UpdateChar(id int64, patch map[string]json.RawMessage) (*Char, e
 			return nil, fmt.Errorf("%w: image %d is not this character's", ErrBadInput, *ref)
 		}
 	}
-	_, err = s.pool.Exec(ctx, `UPDATE hxh_char SET slug=$2, name=$3, name_ja=$4, first=$5, rank=$6, nen_types=$7,
-		affiliation=$8, arcs=$9, arms=$10, description=$11, notes=$12, status=$13, avatar_image_id=$14, card_image_id=$15,
-		updated_at=NOW() WHERE id=$1`,
-		id, c.Slug, c.Name, c.NameJA, c.First, c.Rank, joinSlugs(c.NenTypes), c.Affiliation, joinSlugs(c.Arcs),
-		joinSlugs(c.Arms), c.Description, c.Notes, c.Status, c.AvatarImageID, c.CardImageID)
-	if isUnique(err) {
-		return nil, fmt.Errorf("%w: slug %q is taken", ErrConflict, c.Slug)
-	}
+	_, err = s.pool.Exec(ctx, `UPDATE hxh_char SET name=$2, name_ja=$3, first=$4, rank=$5, nen_types=$6,
+		affiliation=$7, arcs=$8, arms=$9, description=$10, notes=$11, avatar_image_id=$12, card_image_id=$13,
+		version = version + 1, updated_at=NOW() WHERE id=$1`,
+		id, c.Name, c.NameJA, c.First, c.Rank, joinSlugs(c.NenTypes), c.Affiliation, joinSlugs(c.Arcs),
+		joinSlugs(c.Arms), c.Description, c.Notes, c.AvatarImageID, c.CardImageID)
 	if err != nil {
 		return nil, err
 	}
@@ -628,6 +695,9 @@ func (s *Store) AddImage(charID int64, typ string, sourceID *int64, sourceURL, c
 		}
 		return nil, false, err
 	}
+	if err := s.bump(ctx, charID); err != nil {
+		return nil, false, err
+	}
 	im, err = s.GetImage(id)
 	return im, true, err
 }
@@ -641,12 +711,16 @@ func (s *Store) UpdateImage(id int64, status, caption *string) (*Image, error) {
 	}
 	ctx, cancel := withCtx()
 	defer cancel()
-	tag, err := s.pool.Exec(ctx, `UPDATE hxh_char_image SET status = COALESCE($2, status), caption = COALESCE($3, caption) WHERE id = $1`, id, status, caption)
+	var charID int64
+	err := s.pool.QueryRow(ctx, `UPDATE hxh_char_image SET status = COALESCE($2, status), caption = COALESCE($3, caption) WHERE id = $1 RETURNING char_id`, id, status, caption).Scan(&charID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
 	if err != nil {
 		return nil, err
 	}
-	if tag.RowsAffected() == 0 {
-		return nil, ErrNotFound
+	if err := s.bump(ctx, charID); err != nil {
+		return nil, err
 	}
 	return s.GetImage(id)
 }
@@ -654,14 +728,15 @@ func (s *Store) UpdateImage(id int64, status, caption *string) (*Image, error) {
 func (s *Store) DeleteImage(id int64) error {
 	ctx, cancel := withCtx()
 	defer cancel()
-	tag, err := s.pool.Exec(ctx, `DELETE FROM hxh_char_image WHERE id = $1`, id)
+	var charID int64
+	err := s.pool.QueryRow(ctx, `DELETE FROM hxh_char_image WHERE id = $1 RETURNING char_id`, id).Scan(&charID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return s.bump(ctx, charID)
 }
 
 // CropImage cuts rect out of image id at native resolution and stores the
@@ -757,6 +832,7 @@ func MountRosterDB(r chi.Router, store *Store, auth *shared.Store) {
 			a.Post("/chars", handleCreateChar(store))
 			a.Get("/chars/{id}", handleGetChar(store))
 			a.Patch("/chars/{id}", handlePatchChar(store))
+			a.Post("/chars/{id}/review", handleReview(store))
 			a.Delete("/chars/{id}", handleDeleteChar(store))
 			a.Post("/chars/{id}/images", handleUpload(store))
 			a.Get("/images/{id}/meta", handleImageMeta(store))
@@ -769,7 +845,7 @@ func MountRosterDB(r chi.Router, store *Store, auth *shared.Store) {
 
 func handleListChars(store *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		chars, err := store.ListChars(r.URL.Query().Get("status"), r.URL.Query().Get("slug"))
+		chars, err := store.ListChars(r.URL.Query().Get("status"), r.URL.Query().Get("name"))
 		if err != nil {
 			fail(w, err, "list chars")
 			return
@@ -826,6 +902,30 @@ func handlePatchChar(store *Store) http.HandlerFunc {
 		c, err := store.UpdateChar(id, patch)
 		if err != nil {
 			fail(w, err, "patch char")
+			return
+		}
+		writeJSON(w, http.StatusOK, c)
+	}
+}
+
+func handleReview(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, ok := idParam(r, "id")
+		if !ok {
+			fail(w, ErrNotFound, "")
+			return
+		}
+		var body struct {
+			Status string `json:"status"`
+			Reason string `json:"reason"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body); err != nil {
+			fail(w, fmt.Errorf("%w: bad json", ErrBadInput), "review")
+			return
+		}
+		c, err := store.Review(id, body.Status, body.Reason, userOf(r))
+		if err != nil {
+			fail(w, err, "review")
 			return
 		}
 		writeJSON(w, http.StatusOK, c)
@@ -949,7 +1049,7 @@ func handleImageMeta(store *Store) http.HandlerFunc {
 			fail(w, err, "image meta char")
 			return
 		}
-		c.Images = nil
+		c.Images, c.Reviews = nil, nil
 		writeJSON(w, http.StatusOK, map[string]any{"image": im, "char": c})
 	}
 }

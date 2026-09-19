@@ -14,12 +14,18 @@
         a source to check against and are not touched here.
 
           - hxh_char: one row per character; id is the character
-            number. Lists (nen_types, arcs, arms) are comma-separated
-            slugs in one column, Andrew's simplicity preference.
-            status: pending (inserted by the skill, awaiting review),
-            approved, rejected. avatar_image_id / card_image_id point
-            at the chosen 1:1 and 2:3 crops. notes = the skill's
-            sources and judgment calls, for the reviewer.
+            number (no slug — the skill matches by name). Lists
+            (nen_types, arcs, arms) are comma-separated slugs in one
+            column, Andrew's simplicity preference. version counts
+            every change to the character or its pictures (Andrew:
+            "every change increments version"); review_status is the
+            verdict on the current version — pending, accepted,
+            rejected — with review_reason required for a rejection.
+            avatar_image_id / card_image_id point at the chosen 1:1
+            and 2:3 crops. notes = the skill's sources and judgment
+            calls, for the reviewer.
+          - hxh_char_review: the review log — one row per verdict,
+            with the version it was passed on and who passed it.
           - hxh_char_image: every picture, GLOBAL id. type is raw
             (found or uploaded), cropped, pixelated, upscaled or
             transparent; source_image_id says what it was made from.
@@ -35,9 +41,6 @@
         <createTable tableName="hxh_char">
             <column name="id" type="BIGINT" autoIncrement="true">
                 <constraints primaryKey="true" nullable="false"/>
-            </column>
-            <column name="slug" type="VARCHAR(50)">
-                <constraints nullable="false" unique="true" uniqueConstraintName="uq_hxh_char_slug"/>
             </column>
             <column name="name" type="VARCHAR(100)">
                 <constraints nullable="false"/>
@@ -69,7 +72,13 @@
             <column name="notes" type="TEXT" defaultValue="">
                 <constraints nullable="false"/>
             </column>
-            <column name="status" type="VARCHAR(10)" defaultValue="pending">
+            <column name="version" type="INT" defaultValueNumeric="1">
+                <constraints nullable="false"/>
+            </column>
+            <column name="review_status" type="VARCHAR(10)" defaultValue="pending">
+                <constraints nullable="false"/>
+            </column>
+            <column name="review_reason" type="TEXT" defaultValue="">
                 <constraints nullable="false"/>
             </column>
             <column name="avatar_image_id" type="BIGINT"/>
@@ -134,6 +143,39 @@
             </column>
         </createTable>
 
+        <createTable tableName="hxh_char_review">
+            <column name="id" type="BIGINT" autoIncrement="true">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="char_id" type="BIGINT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="version" type="INT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="status" type="VARCHAR(10)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="reason" type="TEXT" defaultValue="">
+                <constraints nullable="false"/>
+            </column>
+            <column name="reviewer" type="VARCHAR(50)" defaultValue="">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <addForeignKeyConstraint
+            constraintName="fk_hxh_char_review_char"
+            baseTableName="hxh_char_review" baseColumnNames="char_id"
+            referencedTableName="hxh_char" referencedColumnNames="id"
+            onDelete="CASCADE"/>
+        <createIndex tableName="hxh_char_review" indexName="idx_hxh_char_review_char">
+            <column name="char_id"/>
+            <column name="created_at"/>
+        </createIndex>
+
         <addForeignKeyConstraint
             constraintName="fk_hxh_char_image_char"
             baseTableName="hxh_char_image" baseColumnNames="char_id"
@@ -161,8 +203,8 @@
             <column name="type"/>
             <column name="created_at"/>
         </createIndex>
-        <createIndex tableName="hxh_char" indexName="idx_hxh_char_status">
-            <column name="status"/>
+        <createIndex tableName="hxh_char" indexName="idx_hxh_char_review_status">
+            <column name="review_status"/>
         </createIndex>
 
     </changeSet>

@@ -139,7 +139,7 @@ func TestValidSlug(t *testing.T) {
 
 func TestApplyPatch(t *testing.T) {
 	base := func() *Char {
-		return &Char{Slug: "gon", Name: "Gon Freecss", Rank: "S", Status: "pending", NenTypes: []string{"enhancement"}}
+		return &Char{Name: "Gon Freecss", Rank: "S", ReviewStatus: "pending", NenTypes: []string{"enhancement"}}
 	}
 	patch := func(s string) map[string]json.RawMessage {
 		var m map[string]json.RawMessage
@@ -149,15 +149,15 @@ func TestApplyPatch(t *testing.T) {
 		return m
 	}
 	c := base()
-	if err := applyPatch(c, patch(`{"name_ja":"ゴン＝フリークス","arcs":["hunter-exam","greed-island"],"status":"approved","avatar_image_id":7,"card_image_id":null}`)); err != nil {
+	if err := applyPatch(c, patch(`{"name_ja":"ゴン＝フリークス","arcs":["hunter-exam","greed-island"],"avatar_image_id":7,"card_image_id":null}`)); err != nil {
 		t.Fatal(err)
 	}
-	if c.NameJA != "ゴン＝フリークス" || len(c.Arcs) != 2 || c.Status != "approved" || c.AvatarImageID == nil || *c.AvatarImageID != 7 || c.CardImageID != nil {
+	if c.NameJA != "ゴン＝フリークス" || len(c.Arcs) != 2 || c.AvatarImageID == nil || *c.AvatarImageID != 7 || c.CardImageID != nil {
 		t.Fatalf("patch not applied: %+v", c)
 	}
 	for _, bad := range []string{
-		`{"rank":"X"}`, `{"status":"maybe"}`, `{"nen_types":["enhancement","emission","conjuration"]}`,
-		`{"nen_types":["fire"]}`, `{"arcs":["dark-continent"]}`, `{"arms":["Fishing Rod"]}`, `{"slug":"Gon"}`,
+		`{"rank":"X"}`, `{"review_status":"accepted"}`, `{"status":"accepted"}`, `{"version":9}`, `{"nen_types":["enhancement","emission","conjuration"]}`,
+		`{"nen_types":["fire"]}`, `{"arcs":["dark-continent"]}`, `{"arms":["Fishing Rod"]}`, `{"slug":"gon"}`,
 		`{"name":"  "}`, `{"glyph":"🎣"}`, `{"avatar_image_id":"seven"}`, `{"arcs":"hunter-exam"}`,
 	} {
 		if err := applyPatch(base(), patch(bad)); err == nil {
