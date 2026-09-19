@@ -92,8 +92,10 @@ func (s *Store) InsertMessage(room, sender, body string) (Message, error) {
 	return m, err
 }
 
-// History returns the newest `limit` live messages of a room written
-// after `after` (the viewer's activation — item 13), oldest first.
+// History returns the newest `limit` messages of a room written after
+// `after` (the viewer's activation — item 13), oldest first. deleted_at
+// is a landed column (unsend was dropped 2026-09-18 as anachronistic —
+// Andrew); nothing sets it any more.
 func (s *Store) History(room string, after time.Time, limit int) ([]Message, error) {
 	ctx, cancel := withCtx()
 	defer cancel()
@@ -118,23 +120,6 @@ func (s *Store) History(room string, after time.Time, limit int) ([]Message, err
 		out[i], out[j] = out[j], out[i]
 	}
 	return out, rows.Err()
-}
-
-// UnsendLast soft-deletes the sender's most recent live message in the
-// room. ok=false when there is nothing to unsend.
-func (s *Store) UnsendLast(room, sender string) (int64, bool, error) {
-	ctx, cancel := withCtx()
-	defer cancel()
-	var id int64
-	err := s.pool.QueryRow(ctx, `
-		UPDATE hxh_chat_message SET deleted_at = NOW()
-		WHERE id = (SELECT id FROM hxh_chat_message WHERE room = $1 AND sender = $2 AND deleted_at IS NULL ORDER BY id DESC LIMIT 1)
-		RETURNING id
-	`, room, sender).Scan(&id)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return 0, false, nil
-	}
-	return id, err == nil, err
 }
 
 func (s *Store) GetProfile(username string) (runs json.RawMessage, updated time.Time, ok bool, err error) {

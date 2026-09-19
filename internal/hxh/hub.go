@@ -5,11 +5,10 @@
 // Wire format (JSON text frames):
 //
 //	client → server  {"t":"msg","room":R,"body":S}  {"t":"typing","room":R}
-//	                 {"t":"unsend","room":R}        {"t":"ping"}
+//	                 {"t":"ping"}
 //	server → client  {"t":"hello","me":U,"contacts":[…]}
 //	                 {"t":"msg","msg":{id,room,sender,body,created_at}}
 //	                 {"t":"typing","room":R,"user":U}
-//	                 {"t":"unsend","room":R,"id":N}
 //	                 {"t":"presence","user":U,"state":S,"last_seen_at":T}
 //	                 {"t":"pong"}  {"t":"error","code":C,"room":R}
 //
@@ -43,7 +42,6 @@ const (
 
 type chatStore interface {
 	InsertMessage(room, sender, body string) (Message, error)
-	UnsendLast(room, sender string) (int64, bool, error)
 }
 
 type memberSource interface {
@@ -385,22 +383,6 @@ func (h *Hub) handle(c *hubClient, data []byte) {
 			return
 		}
 		h.broadcastRoom(f.Room, map[string]any{"t": "msg", "msg": m}, "")
-	case "unsend":
-		if !canUseRoom(c.user, f.Room) {
-			c.fail("room", f.Room)
-			return
-		}
-		id, ok, err := h.store.UnsendLast(f.Room, c.user)
-		if err != nil {
-			log.Printf("[hxh chat] unsend error: %v", err)
-			c.fail("server", f.Room)
-			return
-		}
-		if !ok {
-			c.fail("nothing", f.Room)
-			return
-		}
-		h.broadcastRoom(f.Room, map[string]any{"t": "unsend", "room": f.Room, "id": id}, "")
 	default:
 		c.fail("bad", f.Room)
 	}

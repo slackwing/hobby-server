@@ -26,19 +26,6 @@ func (s *memStore) InsertMessage(room, sender, body string) (Message, error) {
 	return m, nil
 }
 
-func (s *memStore) UnsendLast(room, sender string) (int64, bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i := len(s.msgs) - 1; i >= 0; i-- {
-		if s.msgs[i].Room == room && s.msgs[i].Sender == sender {
-			id := s.msgs[i].ID
-			s.msgs = append(s.msgs[:i], s.msgs[i+1:]...)
-			return id, true, nil
-		}
-	}
-	return 0, false, nil
-}
-
 type memMembers struct {
 	mu      sync.Mutex
 	members []shared.Member
@@ -330,36 +317,6 @@ func TestBodyRulesAndRateLimit(t *testing.T) {
 	frame(andrew, map[string]any{"t": "msg", "room": "global", "body": "ok again"})
 	if f := next(t, andrew); f["t"] != "msg" {
 		t.Fatalf("after refill should pass, got %v", f)
-	}
-}
-
-func TestUnsend(t *testing.T) {
-	h, store, _, _ := newTestHub()
-	andrew, abi := h.add("andrew"), h.add("abi")
-	for _, c := range []*hubClient{andrew, abi} {
-		for len(c.send) > 0 {
-			<-c.send
-		}
-	}
-	frame(andrew, map[string]any{"t": "unsend", "room": "global"})
-	if e := next(t, andrew); e["code"] != "nothing" {
-		t.Fatalf("nothing to unsend, got %v", e)
-	}
-	frame(andrew, map[string]any{"t": "msg", "room": "global", "body": "oops"})
-	frame(andrew, map[string]any{"t": "msg", "room": "global", "body": "last"})
-	for i := 0; i < 2; i++ {
-		next(t, andrew)
-		next(t, abi)
-	}
-	frame(andrew, map[string]any{"t": "unsend", "room": "global"})
-	for _, c := range []*hubClient{andrew, abi} {
-		f := next(t, c)
-		if f["t"] != "unsend" || f["id"].(float64) != 2 || f["room"] != "global" {
-			t.Fatalf("want unsend of #2, got %v", f)
-		}
-	}
-	if len(store.msgs) != 1 || store.msgs[0].Body != "oops" {
-		t.Fatalf("only the last message goes; store has %v", store.msgs)
 	}
 }
 

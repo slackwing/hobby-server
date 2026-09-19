@@ -64,9 +64,9 @@ Plus `GET /healthz` at the server root (used by Docker healthcheck).
 - `GET  /api/hxh/chat/profile/{username}` / `PUT /api/hxh/chat/profile`
   `{runs:[…]}` — AIM-style profiles in a JSON "runs" format (never
   HTML), ≤ 1024 characters
-- `GET  /api/hxh/chat/ws` — the WebSocket: `msg`, `typing`, `unsend`,
-  `ping` in; `hello`, `msg`, `typing`, `unsend`, `presence`, `pong`,
-  `error` out (frame shapes at the top of `internal/hxh/hub.go`).
+- `GET  /api/hxh/chat/ws` — the WebSocket: `msg`, `typing`, `ping` in;
+  `hello`, `msg`, `typing`, `presence`, `pong`, `error` out (frame
+  shapes at the top of `internal/hxh/hub.go`).
   Mounted outside the 15 s request timeout. Apache needs
   `a2enmod proxy_wstunnel` and, after the `/hxh/api` block:
 

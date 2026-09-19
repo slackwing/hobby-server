@@ -28,7 +28,7 @@ schema-related here, look at how manuscript-studio does it.
   from feathers `html/hxh/roster.json`, the master; card fields since
   changeset 004 — see feathers `foundry/website/hxh-roster/CHARACTER.md`)
   and, since changeset 005 (2026-09-18), the **Beetle chat**:
-  `hxh_chat_message` (kept forever, `deleted_at` = unsent) and
+  `hxh_chat_message` (kept forever; `deleted_at` is unused since unsend was dropped) and
   `hxh_chat_profile` (JSON runs). Realtime is a WebSocket hub
   (`internal/hxh/hub.go`, one per process) at `/api/hxh/chat/ws`,
   mounted OUTSIDE the request timeout; Apache proxies that path via
