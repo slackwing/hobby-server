@@ -95,9 +95,9 @@ console (`GET/PUT /api/admin/bots[/{name}]`).
   `metadata.talkativity` (0..1). Every tick (5 min) every bot rolls;
   weight 0.3 + 0.7·talkativity over the sum, so ≈ 1 conversation
   starts per tick. A speech waits 5 s + 55 s·u² (mostly near 5 s),
-  sends "typing" once a second for the last 5 s, and targets the
-  global room or any member (real or bot) uniformly, with a random
-  line from `shared_random_sentences`. A message reaching a bot wakes
+  sends "typing" once a second for the last 5 s, and targets any
+  member (real or bot) or the global room — which weighs as much as
+  three members — with a random line from `shared_random_sentences`. A message reaching a bot wakes
   it: reply chance 0.5 + 0.4·talkativity, same delay — unless
   md5(body) mod 10 < 2 (nobody answers that one), re-checked against
   the room's latest message right before sending. Safety valve: one

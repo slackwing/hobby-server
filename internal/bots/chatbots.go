@@ -81,6 +81,7 @@ type ChatConfig struct {
 	GlobalCooldown  time.Duration // a bot stays quiet in global this long after speaking there (10 min)
 	LingerMin       time.Duration // hold the socket after speaking: 30 s …
 	LingerMax       time.Duration // … to 120 s
+	GlobalWeight    int           // the global room counts as this many people when picking a target (3)
 }
 
 func DefaultChatConfig() ChatConfig {
@@ -88,7 +89,7 @@ func DefaultChatConfig() ChatConfig {
 		Website: "hxh", ExpectedPerTick: 1, WeightMin: 0.3, ReplyMin: 0.5, ReplyMax: 0.9,
 		DelayMin: 5 * time.Second, DelayMax: 60 * time.Second, TypingLead: 5 * time.Second,
 		SilenceMod: 10, SilenceBelow: 2, GlobalCooldown: 10 * time.Minute,
-		LingerMin: 30 * time.Second, LingerMax: 120 * time.Second,
+		LingerMin: 30 * time.Second, LingerMax: 120 * time.Second, GlobalWeight: 3,
 	}
 }
 
@@ -399,7 +400,9 @@ func (c *ChatBots) speak(ctx context.Context, st *botState, room string, replyTo
 	conn.Close()
 }
 
-// pickRoom: the global room or a DM with any other member, uniformly.
+// pickRoom: a DM with any other member, or the global room, which
+// weighs as much as GlobalWeight people (Andrew: "3x the weight of a
+// user", so someone is seen typing there now and then).
 func (c *ChatBots) pickRoom(user string, contacts []Contact) string {
 	others := make([]string, 0, len(contacts))
 	for _, ct := range contacts {
@@ -407,7 +410,11 @@ func (c *ChatBots) pickRoom(user string, contacts []Contact) string {
 			others = append(others, ct.Username)
 		}
 	}
-	i := int(c.rnd() * float64(len(others)+1))
+	gw := c.cfg.GlobalWeight
+	if gw < 1 {
+		gw = 1
+	}
+	i := int(c.rnd() * float64(len(others)+gw))
 	if i >= len(others) {
 		return hxh.RoomGlobal
 	}

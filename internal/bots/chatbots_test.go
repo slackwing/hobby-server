@@ -257,11 +257,19 @@ func TestSpeakFlow(t *testing.T) {
 func TestSpeakPicksDMUniformly(t *testing.T) {
 	h := newHarness(bot("alyosha", 1, true))
 	h.site.contacts = []Contact{{Username: "alyosha"}, {Username: "andrew"}, {Username: "abi"}}
-	h.roll(0, 0, 0.4, 0) // target index 1 of 3 candidates (andrew, abi, global) → abi
+	h.roll(0, 0, 0.3, 0) // index 1 of 5 slots (andrew, abi, global×3) → abi
 	h.c.Tick(context.Background())
 	h.settle()
 	if got := h.site.conns[0].sent[0]; !strings.HasPrefix(got, "dm:abi:alyosha|") {
 		t.Fatalf("want a DM with abi, got %s", got)
+	}
+	// the global room takes the last three of the five slots
+	h.site.conns = nil
+	h.roll(0, 0, 0.5, 0)
+	h.c.Tick(context.Background())
+	h.settle()
+	if got := h.site.conns[0].sent[0]; !strings.HasPrefix(got, "global|") {
+		t.Fatalf("index 2 → global, got %s", got)
 	}
 }
 

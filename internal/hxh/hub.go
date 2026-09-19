@@ -136,7 +136,7 @@ type Hub struct {
 	members memberSource
 	clients map[*hubClient]struct{}
 	byUser  map[string]map[*hubClient]struct{}
-	states  map[string]string // last announced presence per user
+	states  map[string]string // last presence BROADCAST per user (snapshots never write it)
 	now     func() time.Time
 	// OnMessage, when set, is called (in its own goroutine) for every
 	// message the hub stores — the bot service listens here.
@@ -183,14 +183,26 @@ func (h *Hub) Contacts() ([]Contact, error) {
 	out := make([]Contact, 0, len(members))
 	for _, m := range members {
 		state := presenceState(m, h.connected(m.Username), now)
-		h.states[m.Username] = state
 		out = append(out, Contact{Username: m.Username, DisplayName: m.DisplayName, Initial: m.Initial, Color: m.Color, State: state, IsBot: m.IsBot, LastSeenAt: m.LastSeenAt})
 	}
 	return out, nil
 }
 
+// baseline is the state a never-announced user is assumed to have been
+// in: someone present now is announced (they were "offline" to everyone),
+// someone absent is just recorded.
+func baseline(state string) string {
+	if state == "online" || state == "away" {
+		return "offline"
+	}
+	return state
+}
+
 // refreshPresence recomputes every member's state and announces the
-// ones that changed.
+// ones that differ from what was last broadcast. A user never announced
+// counts as offline, so the first sign of life is always announced —
+// a fetch of the contacts list by the user themself (a bot about to
+// speak, say) must never count as "everyone already knows".
 func (h *Hub) refreshPresence() {
 	members, err := h.members.ListMembers()
 	if err != nil {
@@ -206,7 +218,11 @@ func (h *Hub) refreshPresence() {
 	var changes []change
 	for _, m := range members {
 		state := presenceState(m, h.connected(m.Username), now)
-		if h.states[m.Username] != state {
+		prev, known := h.states[m.Username]
+		if !known {
+			prev = baseline(state)
+		}
+		if prev != state {
 			h.states[m.Username] = state
 			changes = append(changes, change{m.Username, state, m.LastSeenAt})
 		}
@@ -229,7 +245,11 @@ func (h *Hub) announce(user string) {
 		}
 		h.mu.Lock()
 		state := presenceState(m, h.connected(user), h.now())
-		changed := h.states[user] != state
+		prev, known := h.states[user]
+		if !known {
+			prev = baseline(state)
+		}
+		changed := prev != state
 		h.states[user] = state
 		h.mu.Unlock()
 		if changed {
@@ -245,7 +265,6 @@ func (h *Hub) add(user string) *hubClient {
 	c := &hubClient{hub: h, user: user, send: make(chan []byte, sendQueue), closed: make(chan struct{}),
 		limiter: bucket{tokens: rateLimit, rate: rateLimit, cap: rateLimit}}
 	h.mu.Lock()
-	prev := h.states[user]
 	h.clients[c] = struct{}{}
 	if h.byUser[user] == nil {
 		h.byUser[user] = map[*hubClient]struct{}{}
@@ -259,18 +278,7 @@ func (h *Hub) add(user string) *hubClient {
 		contacts = []Contact{}
 	}
 	c.sendJSON(map[string]any{"t": "hello", "me": user, "contacts": contacts})
-	h.mu.Lock()
-	now, changed := h.states[user], h.states[user] != prev
-	h.mu.Unlock()
-	if changed {
-		var seen *time.Time
-		for _, ct := range contacts {
-			if ct.Username == user {
-				seen = ct.LastSeenAt
-			}
-		}
-		h.broadcastAll(map[string]any{"t": "presence", "user": user, "state": now, "last_seen_at": seen})
-	}
+	h.announce(user)
 	return c
 }
 

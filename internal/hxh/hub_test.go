@@ -190,6 +190,26 @@ func TestHelloAndPresence(t *testing.T) {
 	none(t, andrew)
 }
 
+func TestOwnContactsFetchDoesNotSwallowPresence(t *testing.T) {
+	h, _, members, now := newTestHub()
+	andrew := h.add("andrew")
+	next(t, andrew)
+	next(t, andrew)
+	// abi's bot logs in and fetches the contacts list (touching last_seen) — a snapshot, not a broadcast
+	members.seen("abi", now.Add(-2*time.Second))
+	if _, err := h.Contacts(); err != nil {
+		t.Fatal(err)
+	}
+	none(t, andrew)
+	// then she connects: andrew must still hear her come online
+	abi := h.add("abi")
+	next(t, abi)
+	p := next(t, andrew)
+	if p["t"] != "presence" || p["user"] != "abi" || p["state"] != "online" {
+		t.Fatalf("want abi online, got %v", p)
+	}
+}
+
 func TestPresenceRefreshTiers(t *testing.T) {
 	h, _, members, now := newTestHub()
 	andrew := h.add("andrew")
