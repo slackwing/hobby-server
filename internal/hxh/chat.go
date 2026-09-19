@@ -67,6 +67,22 @@ func roomParties(room string) (parties []string, ok bool) {
 	return nil, false
 }
 
+// DMPartner is the other party of a DM room `user` belongs to, or "" for
+// the global room and for rooms `user` has no business in.
+func DMPartner(user, room string) string {
+	parties, ok := roomParties(room)
+	if !ok || len(parties) != 2 {
+		return ""
+	}
+	switch user {
+	case parties[0]:
+		return parties[1]
+	case parties[1]:
+		return parties[0]
+	}
+	return ""
+}
+
 // canUseRoom: global is open to every member; a DM only to its two parties.
 func canUseRoom(user, room string) bool {
 	p, ok := roomParties(room)
@@ -90,6 +106,57 @@ func (s *Store) InsertMessage(room, sender, body string) (Message, error) {
 		RETURNING id, created_at
 	`, room, sender, body).Scan(&m.ID, &m.CreatedAt)
 	return m, err
+}
+
+// RoomUnread is what a member has not read in one room.
+type RoomUnread struct {
+	Room   string `json:"room"`
+	Count  int    `json:"count"`
+	LastID int64  `json:"last_id"`
+}
+
+// MarkRead records that `user` has read `room` up to message `id`. The
+// marker never moves backwards (two tabs may report in either order).
+func (s *Store) MarkRead(user, room string, id int64) error {
+	ctx, cancel := withCtx()
+	defer cancel()
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO hxh_chat_read (username, room, last_read_id) VALUES ($1, $2, $3)
+		ON CONFLICT (username, room) DO UPDATE
+		SET last_read_id = GREATEST(hxh_chat_read.last_read_id, EXCLUDED.last_read_id), updated_at = NOW()
+	`, user, room, id)
+	return err
+}
+
+// Unread counts, per room `user` belongs to (global and their DMs), the
+// messages by others written after `after` (the viewer's activation, as
+// History) and past the user's read marker. Rooms with nothing unread
+// are absent. Oldest room first, so windows open in arrival order.
+func (s *Store) Unread(user string, after time.Time) ([]RoomUnread, error) {
+	ctx, cancel := withCtx()
+	defer cancel()
+	rows, err := s.pool.Query(ctx, `
+		SELECT m.room, COUNT(*), MAX(m.id)
+		FROM hxh_chat_message m
+		LEFT JOIN hxh_chat_read r ON r.username = $1 AND r.room = m.room
+		WHERE (m.room = 'global' OR split_part(m.room, ':', 2) = $1 OR split_part(m.room, ':', 3) = $1)
+		  AND m.sender <> $1 AND m.deleted_at IS NULL AND m.created_at > $2
+		  AND m.id > COALESCE(r.last_read_id, 0)
+		GROUP BY m.room ORDER BY MAX(m.id)
+	`, user, after)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []RoomUnread{}
+	for rows.Next() {
+		var u RoomUnread
+		if err := rows.Scan(&u.Room, &u.Count, &u.LastID); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
 }
 
 // History returns the newest `limit` messages of a room written after

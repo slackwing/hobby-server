@@ -64,9 +64,14 @@ Plus `GET /healthz` at the server root (used by Docker healthcheck).
 - `GET  /api/hxh/chat/profile/{username}` / `PUT /api/hxh/chat/profile`
   `{runs:[…]}` — AIM-style profiles in a JSON "runs" format (never
   HTML), ≤ 1024 characters
-- `GET  /api/hxh/chat/ws` — the WebSocket: `msg`, `typing`, `ping` in;
-  `hello`, `msg`, `typing`, `presence`, `pong`, `error` out (frame
-  shapes at the top of `internal/hxh/hub.go`).
+- `GET  /api/hxh/chat/ws` — the WebSocket: `msg`, `typing`, `read`,
+  `ping` in; `hello` (contacts + `unread` per room), `msg`, `typing`,
+  `presence`, `read` (to the user's other tabs), `pong`, `error` out
+  (frame shapes at the top of `internal/hxh/hub.go`). Read markers
+  (`hxh_chat_read`, changeset 008) are per user and room: Andrew's
+  rule is that only the focused tab's active window reads. A DM to
+  someone neither online nor away is refused (`error offline`) —
+  "you can message online and away people, but not offline".
   Mounted outside the 15 s request timeout. Apache needs
   `a2enmod proxy_wstunnel` and, after the `/hxh/api` block:
 
@@ -96,8 +101,11 @@ console (`GET/PUT /api/admin/bots[/{name}]`).
   weight 0.3 + 0.7·talkativity over the sum, so ≈ 1 conversation
   starts per tick. A speech waits 5 s + 55 s·u² (mostly near 5 s),
   sends "typing" once a second for the last 5 s, and targets any
-  member (real or bot) or the global room — which weighs as much as
-  three members — with a random line from `shared_random_sentences`. A message reaching a bot wakes
+  REACHABLE member (online or away — never the offline or the
+  password-less, real or bot; same rule as the hub) or the global
+  room — which weighs as much as three members — with a random line
+  from `shared_random_sentences`. A reply owed to someone who went
+  offline is dropped. A message reaching a bot wakes
   it: reply chance 0.5 + 0.4·talkativity, same delay — unless
   md5(body) mod 10 < 2 (nobody answers that one), re-checked against
   the room's latest message right before sending. Safety valve: one

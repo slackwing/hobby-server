@@ -2,6 +2,8 @@ package hxh
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -12,9 +14,10 @@ import (
 // ---- fakes ----
 
 type memStore struct {
-	mu   sync.Mutex
-	msgs []Message
-	next int64
+	mu    sync.Mutex
+	msgs  []Message
+	next  int64
+	reads map[string]int64 // user|room → last read id
 }
 
 func (s *memStore) InsertMessage(room, sender, body string) (Message, error) {
@@ -24,6 +27,47 @@ func (s *memStore) InsertMessage(room, sender, body string) (Message, error) {
 	m := Message{ID: s.next, Room: room, Sender: sender, Body: body, CreatedAt: time.Now()}
 	s.msgs = append(s.msgs, m)
 	return m, nil
+}
+
+func (s *memStore) MarkRead(user, room string, id int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.reads == nil {
+		s.reads = map[string]int64{}
+	}
+	if id > s.reads[user+"|"+room] {
+		s.reads[user+"|"+room] = id
+	}
+	return nil
+}
+
+// Unread mirrors the SQL: others' messages after `after`, past the marker, in rooms of mine; oldest room first.
+func (s *memStore) Unread(user string, after time.Time) ([]RoomUnread, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	agg := map[string]*RoomUnread{}
+	var order []string
+	for _, m := range s.msgs {
+		if m.Sender == user || !m.CreatedAt.After(after) || (m.Room != RoomGlobal && DMPartner(user, m.Room) == "") {
+			continue
+		}
+		if m.ID <= s.reads[user+"|"+m.Room] {
+			continue
+		}
+		u := agg[m.Room]
+		if u == nil {
+			u = &RoomUnread{Room: m.Room}
+			agg[m.Room] = u
+			order = append(order, m.Room)
+		}
+		u.Count++
+		u.LastID = m.ID
+	}
+	out := []RoomUnread{}
+	for _, r := range order {
+		out = append(out, *agg[r])
+	}
+	return out, nil
 }
 
 type memMembers struct {
@@ -233,6 +277,119 @@ func TestPresenceRefreshTiers(t *testing.T) {
 	h.refreshPresence()
 	if p = next(t, andrew); p["state"] != "offline" {
 		t.Fatalf("2 h later → offline, got %v", p)
+	}
+}
+
+func drain(cs ...*hubClient) {
+	for _, c := range cs {
+		for len(c.send) > 0 {
+			<-c.send
+		}
+	}
+}
+
+// unreadOf renders a hello's unread list as "room:count@last_id …".
+func unreadOf(hello map[string]any) string {
+	var parts []string
+	for _, x := range hello["unread"].([]any) {
+		u := x.(map[string]any)
+		parts = append(parts, fmt.Sprintf("%s:%v@%v", u["room"], u["count"], u["last_id"]))
+	}
+	return strings.Join(parts, " ")
+}
+
+func TestHelloCarriesUnreadAndReadsAreSharedAcrossTabs(t *testing.T) {
+	h, store, _, _ := newTestHub()
+	dm := DMRoom("abi", "andrew")
+	store.InsertMessage(RoomGlobal, "abi", "one")
+	store.InsertMessage(RoomGlobal, "abi", "two")
+	m3, _ := store.InsertMessage(dm, "abi", "psst")
+	store.InsertMessage(DMRoom("abi", "newbie"), "abi", "not yours")
+	store.InsertMessage(RoomGlobal, "andrew", "mine") // own messages never count
+	andrew := h.add("andrew")
+	hello := next(t, andrew)
+	if hello["t"] != "hello" {
+		t.Fatalf("hello first, got %v", hello)
+	}
+	if got := unreadOf(hello); got != "global:2@2 dm:abi:andrew:1@3" {
+		t.Fatalf("unread per room, oldest first: %s", got)
+	}
+	drain(andrew)
+	// the focused tab read global up to 2: no echo to itself…
+	frame(andrew, map[string]any{"t": "read", "room": RoomGlobal, "id": 2})
+	none(t, andrew)
+	// …and the next hello no longer lists global
+	tab2 := h.add("andrew")
+	hello2 := next(t, tab2)
+	if got := unreadOf(hello2); got != "dm:abi:andrew:1@3" {
+		t.Fatalf("global was read: %s", got)
+	}
+	drain(andrew, tab2)
+	// a read in the second tab reaches the first (and nobody else)
+	abi := h.add("abi")
+	drain(andrew, tab2, abi)
+	frame(tab2, map[string]any{"t": "read", "room": dm, "id": m3.ID})
+	r := next(t, andrew)
+	if r["t"] != "read" || r["room"] != dm || r["id"] != float64(m3.ID) {
+		t.Fatalf("other tab told, got %v", r)
+	}
+	none(t, tab2)
+	none(t, abi)
+	// markers never move backwards; foreign rooms and bad ids are refused
+	frame(tab2, map[string]any{"t": "read", "room": dm, "id": 1})
+	u, _ := store.Unread("andrew", time.Time{})
+	if len(u) != 0 {
+		t.Fatalf("still read after a stale marker, got %v", u)
+	}
+	drain(andrew)
+	frame(tab2, map[string]any{"t": "read", "room": DMRoom("abi", "newbie"), "id": 4})
+	if e := next(t, tab2); e["code"] != "room" {
+		t.Fatalf("foreign room refused, got %v", e)
+	}
+	frame(tab2, map[string]any{"t": "read", "room": RoomGlobal, "id": 0})
+	if e := next(t, tab2); e["code"] != "bad" {
+		t.Fatalf("id 0 refused, got %v", e)
+	}
+}
+
+func TestDMNeedsAReachablePartner(t *testing.T) {
+	h, _, members, now := newTestHub()
+	andrew := h.add("andrew")
+	h.refreshPresence() // abi never seen: offline, and so never recorded
+	drain(andrew)
+	room := DMRoom("andrew", "abi")
+	say := func() map[string]any {
+		frame(andrew, map[string]any{"t": "msg", "room": room, "body": "psst"})
+		return next(t, andrew)
+	}
+	if e := say(); e["t"] != "error" || e["code"] != "offline" {
+		t.Fatalf("offline partner refused, got %v", e)
+	}
+	members.seen("abi", now.Add(-30*time.Minute)) // away
+	h.refreshPresence()
+	drain(andrew)
+	if m := say(); m["t"] != "msg" {
+		t.Fatalf("away partner reachable, got %v", m)
+	}
+	*now = now.Add(2 * time.Hour) // abi drifts offline
+	h.refreshPresence()
+	drain(andrew)
+	if e := say(); e["code"] != "offline" {
+		t.Fatalf("offline again, got %v", e)
+	}
+	abi := h.add("abi") // connected: online at once, before any refresh
+	drain(andrew, abi)
+	if m := say(); m["t"] != "msg" {
+		t.Fatalf("connected partner reachable, got %v", m)
+	}
+	drain(abi)
+	frame(andrew, map[string]any{"t": "msg", "room": DMRoom("andrew", "newbie"), "body": "hi"})
+	if e := next(t, andrew); e["code"] != "offline" {
+		t.Fatalf("no password = unreachable, got %v", e)
+	}
+	frame(andrew, map[string]any{"t": "msg", "room": RoomGlobal, "body": "all"})
+	if m := next(t, andrew); m["t"] != "msg" {
+		t.Fatalf("global needs nobody, got %v", m)
 	}
 }
 

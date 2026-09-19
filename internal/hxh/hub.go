@@ -5,12 +5,18 @@
 // Wire format (JSON text frames):
 //
 //	client → server  {"t":"msg","room":R,"body":S}  {"t":"typing","room":R}
+//	                 {"t":"read","room":R,"id":N}  (the focused tab showed R up to message N)
 //	                 {"t":"ping"}
-//	server → client  {"t":"hello","me":U,"contacts":[…]}
+//	server → client  {"t":"hello","me":U,"contacts":[…],"unread":[{room,count,last_id}…]}
 //	                 {"t":"msg","msg":{id,room,sender,body,created_at}}
 //	                 {"t":"typing","room":R,"user":U}
 //	                 {"t":"presence","user":U,"state":S,"last_seen_at":T}
+//	                 {"t":"read","room":R,"id":N}  (to the user's OTHER tabs)
 //	                 {"t":"pong"}  {"t":"error","code":C,"room":R}
+//
+// Error codes: room (not yours), body, rate, server, bad, and offline —
+// a DM to someone neither online nor away is refused (Andrew,
+// 2026-09-19: "you can message online and away people, but not offline").
 //
 // Presence tiers (spec item 16): online = a live connection or activity
 // in the last minute, away = last hour, offline otherwise, nopass = the
@@ -42,6 +48,8 @@ const (
 
 type chatStore interface {
 	InsertMessage(room, sender, body string) (Message, error)
+	MarkRead(user, room string, id int64) error
+	Unread(user string, after time.Time) ([]RoomUnread, error)
 }
 
 type memberSource interface {
@@ -157,6 +165,7 @@ func NewHub(store chatStore, members memberSource) *Hub {
 func (h *Hub) Run(ctx context.Context, every time.Duration) {
 	t := time.NewTicker(every)
 	defer t.Stop()
+	h.refreshPresence() // know everyone's tier before the first DM is judged
 	for {
 		select {
 		case <-ctx.Done():
@@ -177,6 +186,11 @@ func (h *Hub) Contacts() ([]Contact, error) {
 	if err != nil {
 		return nil, err
 	}
+	return h.contactsOf(members), nil
+}
+
+// contactsOf is a presence snapshot of `members`; it records nothing.
+func (h *Hub) contactsOf(members []shared.Member) []Contact {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	now := h.now()
@@ -185,7 +199,23 @@ func (h *Hub) Contacts() ([]Contact, error) {
 		state := presenceState(m, h.connected(m.Username), now)
 		out = append(out, Contact{Username: m.Username, DisplayName: m.DisplayName, Initial: m.Initial, Color: m.Color, State: state, IsBot: m.IsBot, LastSeenAt: m.LastSeenAt})
 	}
-	return out, nil
+	return out
+}
+
+// reachable: may `user` be messaged right now? Online or away — not
+// offline, not without a password (Andrew, 2026-09-19: "you can message
+// online and away people, but not offline"). A live connection counts
+// before the next presence refresh; a member never announced since the
+// server started is offline by construction (refreshPresence records
+// only the present).
+func (h *Hub) reachable(user string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.connected(user) {
+		return true
+	}
+	st := h.states[user]
+	return st == "online" || st == "away"
 }
 
 // baseline is the state a never-announced user is assumed to have been
@@ -272,12 +302,28 @@ func (h *Hub) add(user string) *hubClient {
 	h.byUser[user][c] = struct{}{}
 	h.mu.Unlock()
 	h.members.TouchLastSeen(user)
-	contacts, err := h.Contacts() // records the user as online
+	members, err := h.members.ListMembers()
 	if err != nil {
-		log.Printf("[hxh chat] hello contacts error: %v", err)
-		contacts = []Contact{}
+		log.Printf("[hxh chat] hello members error: %v", err)
 	}
-	c.sendJSON(map[string]any{"t": "hello", "me": user, "contacts": contacts})
+	contacts := h.contactsOf(members)
+	unread := []RoomUnread{}
+	for _, m := range members {
+		if m.Username != user {
+			continue
+		}
+		var after time.Time
+		if m.ActivatedAt != nil {
+			after = *m.ActivatedAt
+		}
+		if u, err := h.store.Unread(user, after); err != nil {
+			log.Printf("[hxh chat] hello unread error: %v", err)
+		} else if u != nil {
+			unread = u
+		}
+		break
+	}
+	c.sendJSON(map[string]any{"t": "hello", "me": user, "contacts": contacts, "unread": unread})
 	h.announce(user)
 	return c
 }
@@ -294,6 +340,22 @@ func (h *Hub) remove(c *hubClient) {
 	}
 	h.mu.Unlock()
 	h.announce(c.user)
+}
+
+// broadcastUser sends v to every connection of `user` but `except`: a
+// read marker made in one tab reaches the user's other tabs.
+func (h *Hub) broadcastUser(user string, v any, except *hubClient) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for c := range h.byUser[user] {
+		if c != except {
+			c.enqueue(data)
+		}
+	}
 }
 
 func (h *Hub) broadcastAll(v any) {
@@ -351,6 +413,7 @@ type inFrame struct {
 	T    string `json:"t"`
 	Room string `json:"room"`
 	Body string `json:"body"`
+	ID   int64  `json:"id"`
 }
 
 func (c *hubClient) fail(code, room string) {
@@ -374,9 +437,29 @@ func (h *Hub) handle(c *hubClient, data []byte) {
 			return
 		}
 		h.broadcastRoom(f.Room, map[string]any{"t": "typing", "room": f.Room, "user": c.user}, c.user)
+	case "read":
+		// the focused tab's active window showed the room up to message ID
+		if !canUseRoom(c.user, f.Room) {
+			c.fail("room", f.Room)
+			return
+		}
+		if f.ID <= 0 {
+			c.fail("bad", f.Room)
+			return
+		}
+		if err := h.store.MarkRead(c.user, f.Room, f.ID); err != nil {
+			log.Printf("[hxh chat] read error: %v", err)
+			c.fail("server", f.Room)
+			return
+		}
+		h.broadcastUser(c.user, map[string]any{"t": "read", "room": f.Room, "id": f.ID}, c)
 	case "msg":
 		if !canUseRoom(c.user, f.Room) {
 			c.fail("room", f.Room)
+			return
+		}
+		if other := DMPartner(c.user, f.Room); other != "" && !h.reachable(other) {
+			c.fail("offline", f.Room)
 			return
 		}
 		body := strings.TrimSpace(f.Body)

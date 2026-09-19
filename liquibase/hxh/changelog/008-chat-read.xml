@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        Read markers for Beetle (2026-09-19). Andrew: "the most explicit
+        focus is what makes something read" — a message counts as read
+        only when the focused tab's active window showed it, so "read"
+        must live on the server, shared by every tab and every login.
+        One row per (user, room): the highest message id the user has
+        seen there. Unread = messages by others past that id (and past
+        the user's activation, as history already is).
+    -->
+
+    <changeSet id="008-chat-read" author="hxh">
+        <createTable tableName="hxh_chat_read">
+            <column name="username" type="VARCHAR(50)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="room" type="VARCHAR(120)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="last_read_id" type="BIGINT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+    </changeSet>
+
+</databaseChangeLog>

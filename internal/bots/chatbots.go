@@ -348,14 +348,22 @@ func (c *ChatBots) speak(ctx context.Context, st *botState, room string, replyTo
 		c.logf("[bots] %s login: %v", user, err)
 		return
 	}
-	if room == "" {
-		contacts, err := c.site.Contacts(ctx, sess)
+	var contacts []Contact
+	if room == "" || hxh.DMPartner(user, room) != "" {
+		contacts, err = c.site.Contacts(ctx, sess)
 		if err != nil {
 			c.logf("[bots] %s contacts: %v", user, err)
 			c.forget(st)
 			return
 		}
+	}
+	if room == "" {
 		room = c.pickRoom(user, contacts)
+	}
+	if other := hxh.DMPartner(user, room); other != "" && !reachable(contacts, other) {
+		// the hub would refuse it anyway (error "offline"); a bot just lets them be
+		c.logf("[bots] %s lets %s be (offline)", user, other)
+		return
 	}
 	conn, err := c.site.Connect(ctx, sess)
 	if err != nil {
@@ -400,13 +408,25 @@ func (c *ChatBots) speak(ctx context.Context, st *botState, room string, replyTo
 	conn.Close()
 }
 
-// pickRoom: a DM with any other member, or the global room, which
-// weighs as much as GlobalWeight people (Andrew: "3x the weight of a
-// user", so someone is seen typing there now and then).
+// reachable: may this contact be messaged? Online or away — not
+// offline, not without a password (Andrew, 2026-09-19).
+func reachable(contacts []Contact, user string) bool {
+	for _, ct := range contacts {
+		if ct.Username == user {
+			return ct.State == "online" || ct.State == "away"
+		}
+	}
+	return false
+}
+
+// pickRoom: a DM with any other REACHABLE member (online or away), or
+// the global room, which weighs as much as GlobalWeight people (Andrew:
+// "3x the weight of a user", so someone is seen typing there now and
+// then). With nobody reachable, global it is.
 func (c *ChatBots) pickRoom(user string, contacts []Contact) string {
 	others := make([]string, 0, len(contacts))
 	for _, ct := range contacts {
-		if ct.Username != user {
+		if ct.Username != user && reachable(contacts, ct.Username) {
 			others = append(others, ct.Username)
 		}
 	}

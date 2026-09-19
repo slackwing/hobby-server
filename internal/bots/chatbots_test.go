@@ -223,7 +223,7 @@ func TestTickRollsEveryBotByWeight(t *testing.T) {
 
 func TestSpeakFlow(t *testing.T) {
 	h := newHarness(bot("alyosha", 0.5, true))
-	h.site.contacts = []Contact{{Username: "alyosha"}, {Username: "andrew"}, {Username: "abi"}}
+	h.site.contacts = []Contact{{Username: "alyosha", State: "online"}, {Username: "andrew", State: "online"}, {Username: "abi", State: "away"}}
 	// rolls: tick chance (weight .65/.65 = 1 → any roll passes), delay u, target index, linger
 	h.roll(0.0, 0.5, 0.99, 0.0)
 	h.c.Tick(context.Background())
@@ -256,7 +256,7 @@ func TestSpeakFlow(t *testing.T) {
 
 func TestSpeakPicksDMUniformly(t *testing.T) {
 	h := newHarness(bot("alyosha", 1, true))
-	h.site.contacts = []Contact{{Username: "alyosha"}, {Username: "andrew"}, {Username: "abi"}}
+	h.site.contacts = []Contact{{Username: "alyosha", State: "online"}, {Username: "andrew", State: "online"}, {Username: "abi", State: "away"}}
 	h.roll(0, 0, 0.3, 0) // index 1 of 5 slots (andrew, abi, global×3) → abi
 	h.c.Tick(context.Background())
 	h.settle()
@@ -273,9 +273,44 @@ func TestSpeakPicksDMUniformly(t *testing.T) {
 	}
 }
 
+func TestBotsLetTheOfflineBe(t *testing.T) {
+	h := newHarness(bot("alyosha", 1, true))
+	h.site.contacts = []Contact{{Username: "alyosha", State: "online"}, {Username: "andrew", State: "offline"}, {Username: "abi", State: "away"}, {Username: "newbie", State: "nopass"}}
+	// slots: abi, global×3 — andrew (offline) and newbie (no password) are not on the list
+	h.roll(0, 0, 0.1, 0)
+	h.c.Tick(context.Background())
+	h.settle()
+	if got := h.site.conns[0].sent[0]; !strings.HasPrefix(got, "dm:abi:alyosha|") {
+		t.Fatalf("index 0 of 4 → abi, got %s", got)
+	}
+	h.site.conns = nil
+	h.roll(0, 0, 0.3, 0)
+	h.c.Tick(context.Background())
+	h.settle()
+	if got := h.site.conns[0].sent[0]; !strings.HasPrefix(got, "global|") {
+		t.Fatalf("index 1 of 4 → global, got %s", got)
+	}
+	// a reply owed to someone who went offline is not sent
+	h.site.conns = nil
+	h.roll(0)
+	h.c.speak(context.Background(), h.c.state("alyosha"), "dm:alyosha:andrew", nil)
+	if len(h.site.conns) != 0 {
+		t.Fatalf("no socket opened for an offline partner, got %d", len(h.site.conns))
+	}
+	// with nobody reachable at all, global it is
+	h.site.contacts = []Contact{{Username: "alyosha", State: "online"}, {Username: "andrew", State: "offline"}}
+	h.roll(0, 0, 0.0, 0)
+	h.c.Tick(context.Background())
+	h.settle()
+	if got := h.site.conns[0].sent[0]; !strings.HasPrefix(got, "global|") {
+		t.Fatalf("nobody reachable → global, got %s", got)
+	}
+}
+
 func TestHookReplyAndGates(t *testing.T) {
 	h := newHarness(bot("alyosha", 0, true), bot("fyodor", 1, true))
-	h.c.Tick(context.Background()) // registers the bots (rolls default 0.5: chances .23/.77 → fyodor speaks)
+	h.site.contacts = []Contact{{Username: "alyosha", State: "online"}, {Username: "andrew", State: "online"}} // a reply needs a reachable partner
+	h.c.Tick(context.Background())                                                                             // registers the bots (rolls default 0.5: chances .23/.77 → fyodor speaks)
 	h.settle()
 	h.site.conns = nil
 	h.sleeps = nil
