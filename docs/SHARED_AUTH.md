@@ -189,9 +189,11 @@ it the console says "email not configured" and sends 503.
    (Client-side gating is UX, not security — protect DATA in APIs.)
    Use `initial`/`color` for the user's avatar if the site shows one.
 2. Optionally skin `_invite/` and `_reset/`: copy `html/hxh/_invite/`,
-   `html/hxh/_reset/` and `html/hxh/pwpage.js` (feathers) and restyle;
-   keep the `data-pw` hooks and load `/admin/assets/setpw.js`. Without
-   a skin, links use the default pages.
+   `html/hxh/_reset/` (feathers) and restyle — hxh's markup lives in
+   its `SetPassword` app (`html/hxh/apps/setpw.js`), a plain page can
+   inline the same `data-pw`-tagged form; keep the `data-pw` hooks and
+   load `/admin/assets/setpw.js`. Without a skin, links use the default
+   pages.
 3. Copy `html/hxh/_email/` (manifest, `_layout.html`, `invite.html`,
    `account-created.html`, `reset.html`, `index.html`) and reskin. Keep
    the ids and the `invite` / `reset` / `on: accept` flags.
