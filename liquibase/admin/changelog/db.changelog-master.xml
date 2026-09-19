@@ -22,5 +22,6 @@
     <include file="changelog/004-user-profile.xml"/>
     <include file="changelog/005-token-kind-active-site.xml"/>
     <include file="changelog/006-presence-activation.xml"/>
+    <include file="changelog/007-bots.xml"/>
 
 </databaseChangeLog>

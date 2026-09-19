@@ -14,6 +14,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -154,15 +155,33 @@ type Role struct {
 }
 
 type User struct {
-	Username    string    `json:"username"`
-	DisplayName string    `json:"display_name"`
-	Initial     string    `json:"initial"`
-	Color       string    `json:"color"`
-	Email       string    `json:"email"`
-	ActiveSite  string    `json:"active_site"`
-	HasPassword bool      `json:"has_password"`
-	CreatedAt   time.Time `json:"created_at"`
-	Roles       []Role    `json:"roles"`
+	Username    string          `json:"username"`
+	DisplayName string          `json:"display_name"`
+	Initial     string          `json:"initial"`
+	Color       string          `json:"color"`
+	Email       string          `json:"email"`
+	ActiveSite  string          `json:"active_site"`
+	HasPassword bool            `json:"has_password"`
+	IsBot       bool            `json:"is_bot"`
+	Metadata    json.RawMessage `json:"metadata"`
+	CreatedAt   time.Time       `json:"created_at"`
+	Roles       []Role          `json:"roles"`
+}
+
+// Bot is a bot account as the bot programs see it.
+type Bot struct {
+	Username    string
+	DisplayName string
+	HasPassword bool
+	Talkativity float64 // metadata.talkativity, 0..1 (0.5 when unset)
+}
+
+// BotProgram is one row of the bot-program registry.
+type BotProgram struct {
+	Name      string          `json:"name"`
+	Enabled   bool            `json:"enabled"`
+	Config    json.RawMessage `json:"config"`
+	UpdatedAt time.Time       `json:"updated_at"`
 }
 
 // Account is one hobby_server_user row as the handlers need it.
@@ -189,6 +208,7 @@ type Member struct {
 	Initial     string     `json:"initial"`
 	Color       string     `json:"color"`
 	HasPassword bool       `json:"has_password"`
+	IsBot       bool       `json:"is_bot"`
 	LastSeenAt  *time.Time `json:"last_seen_at"`
 	ActivatedAt *time.Time `json:"activated_at"`
 }
@@ -246,8 +266,8 @@ func (s *Store) ListUsers() ([]User, error) {
 	defer cancel()
 	rows, err := s.pool.Query(ctx, `
 		SELECT username, display_name, initial, color, COALESCE(email, ''), COALESCE(active_site, ''),
-		       password_hash IS NOT NULL, created_at
-		FROM hobby_server_user ORDER BY username
+		       password_hash IS NOT NULL, is_bot, metadata, created_at
+		FROM hobby_server_user ORDER BY is_bot, username
 	`)
 	if err != nil {
 		return nil, err
@@ -257,7 +277,7 @@ func (s *Store) ListUsers() ([]User, error) {
 	users := []User{}
 	for rows.Next() {
 		var u User
-		if err := rows.Scan(&u.Username, &u.DisplayName, &u.Initial, &u.Color, &u.Email, &u.ActiveSite, &u.HasPassword, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.Username, &u.DisplayName, &u.Initial, &u.Color, &u.Email, &u.ActiveSite, &u.HasPassword, &u.IsBot, &u.Metadata, &u.CreatedAt); err != nil {
 			return nil, err
 		}
 		u.Roles = []Role{}
@@ -290,13 +310,135 @@ func (s *Store) ListUsers() ([]User, error) {
 	return users, rrows.Err()
 }
 
+// ListBots returns the bot accounts holding any role on `website`.
+func (s *Store) ListBots(website string) ([]Bot, error) {
+	ctx, cancel := withCtx()
+	defer cancel()
+	rows, err := s.pool.Query(ctx, `
+		SELECT u.username, u.display_name, u.password_hash IS NOT NULL,
+		       COALESCE((u.metadata->>'talkativity')::float8, 0.5)
+		FROM hobby_server_user u
+		WHERE u.is_bot AND EXISTS (SELECT 1 FROM hobby_server_user_roles r WHERE r.username = u.username AND r.website = $1)
+		ORDER BY u.username
+	`, website)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Bot{}
+	for rows.Next() {
+		var b Bot
+		if err := rows.Scan(&b.Username, &b.DisplayName, &b.HasPassword, &b.Talkativity); err != nil {
+			return nil, err
+		}
+		if b.Talkativity < 0 {
+			b.Talkativity = 0
+		}
+		if b.Talkativity > 1 {
+			b.Talkativity = 1
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+// SetPasswordDirect provisions a password hash without a token — used
+// only for bot accounts. The first password activates the account.
+func (s *Store) SetPasswordDirect(username, passwordHash string) error {
+	ctx, cancel := withCtx()
+	defer cancel()
+	_, err := s.pool.Exec(ctx, `
+		UPDATE hobby_server_user SET password_hash = $1, activated_at = COALESCE(activated_at, NOW()) WHERE username = $2 AND is_bot
+	`, passwordHash, username)
+	return err
+}
+
+// ---------- bot programs ----------
+
+func (s *Store) BotPrograms() ([]BotProgram, error) {
+	ctx, cancel := withCtx()
+	defer cancel()
+	rows, err := s.pool.Query(ctx, `SELECT name, enabled, config, updated_at FROM shared_bot_program ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []BotProgram{}
+	for rows.Next() {
+		var p BotProgram
+		if err := rows.Scan(&p.Name, &p.Enabled, &p.Config, &p.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// BotProgramEnabled: unknown programs are disabled.
+func (s *Store) BotProgramEnabled(name string) (bool, error) {
+	ctx, cancel := withCtx()
+	defer cancel()
+	var on bool
+	err := s.pool.QueryRow(ctx, `SELECT enabled FROM shared_bot_program WHERE name = $1`, name).Scan(&on)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return on, err
+}
+
+func (s *Store) SetBotProgram(name string, enabled bool) (bool, error) {
+	ctx, cancel := withCtx()
+	defer cancel()
+	tag, err := s.pool.Exec(ctx, `UPDATE shared_bot_program SET enabled = $1, updated_at = NOW() WHERE name = $2`, enabled, name)
+	return tag.RowsAffected() > 0, err
+}
+
+// ---------- shared sentences ----------
+
+// RandomSentence picks one line of the shared corpus (ok=false when empty).
+func (s *Store) RandomSentence() (sentence, source string, ok bool, err error) {
+	ctx, cancel := withCtx()
+	defer cancel()
+	err = s.pool.QueryRow(ctx, `
+		SELECT sentence, source FROM shared_random_sentences
+		OFFSET floor(random() * GREATEST((SELECT COUNT(*) FROM shared_random_sentences), 1)) LIMIT 1
+	`).Scan(&sentence, &source)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", "", false, nil
+	}
+	return sentence, source, err == nil, err
+}
+
+// InsertSentences adds lines to the corpus, skipping duplicates. Returns how many were new.
+func (s *Store) InsertSentences(source string, sentences []string) (int, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	n := 0
+	for _, t := range sentences {
+		tag, err := s.pool.Exec(ctx, `INSERT INTO shared_random_sentences (sentence, source) VALUES ($1, $2) ON CONFLICT (sentence) DO NOTHING`, t, source)
+		if err != nil {
+			return n, err
+		}
+		n += int(tag.RowsAffected())
+	}
+	return n, nil
+}
+
+func (s *Store) CountSentences() (int, error) {
+	ctx, cancel := withCtx()
+	defer cancel()
+	var n int
+	err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM shared_random_sentences`).Scan(&n)
+	return n, err
+}
+
 // ListMembers returns every user holding any role on `website`, by
 // display name — the chat contacts list.
 func (s *Store) ListMembers(website string) ([]Member, error) {
 	ctx, cancel := withCtx()
 	defer cancel()
 	rows, err := s.pool.Query(ctx, `
-		SELECT u.username, u.display_name, u.initial, u.color, u.password_hash IS NOT NULL, u.last_seen_at, u.activated_at
+		SELECT u.username, u.display_name, u.initial, u.color, u.password_hash IS NOT NULL, u.is_bot, u.last_seen_at, u.activated_at
 		FROM hobby_server_user u
 		WHERE EXISTS (SELECT 1 FROM hobby_server_user_roles r WHERE r.username = u.username AND r.website = $1)
 		ORDER BY LOWER(u.display_name), u.username
@@ -308,7 +450,7 @@ func (s *Store) ListMembers(website string) ([]Member, error) {
 	out := []Member{}
 	for rows.Next() {
 		var m Member
-		if err := rows.Scan(&m.Username, &m.DisplayName, &m.Initial, &m.Color, &m.HasPassword, &m.LastSeenAt, &m.ActivatedAt); err != nil {
+		if err := rows.Scan(&m.Username, &m.DisplayName, &m.Initial, &m.Color, &m.HasPassword, &m.IsBot, &m.LastSeenAt, &m.ActivatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, m)

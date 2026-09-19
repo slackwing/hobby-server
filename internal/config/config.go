@@ -78,9 +78,27 @@ type Email struct {
 	SiteBaseURL string `yaml:"site_base_url"`
 }
 
+// Bots configures the bot service (internal/bots): fake users that use
+// the PUBLIC site API like real players. Omit the block to run no bots.
+type Bots struct {
+	Enabled bool `yaml:"enabled"`
+	// BaseURL is where the bots reach the site — the public origin in
+	// production (through Apache, TLS and all), the Go server itself in
+	// development (then set Direct).
+	BaseURL string `yaml:"base_url"`
+	// Direct: BaseURL is the Go server (paths /api/<site>/…) rather than
+	// the public site (paths /<site>/api/…).
+	Direct bool `yaml:"direct"`
+	// Password is provisioned onto every bot account (never logged).
+	Password string `yaml:"password"`
+	// Tick is the scheduler interval ("5m" default; "30s" in dev).
+	Tick string `yaml:"tick"`
+}
+
 type Config struct {
 	Server   Server    `yaml:"server"`
 	Email    Email     `yaml:"email"`
+	Bots     Bots      `yaml:"bots"`
 	Projects []Project `yaml:"projects"`
 }
 

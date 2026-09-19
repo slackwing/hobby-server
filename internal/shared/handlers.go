@@ -33,7 +33,7 @@ func Mount(r chi.Router, store *Store, cookiePath string, secure bool, email *Em
 
 	// Admin-only: requires role "admin" on website "admin".
 	r.Group(func(g chi.Router) {
-		g.Use(requireAdmin(store))
+		g.Use(RequireAdmin(store))
 		g.Get("/users", handleListUsers(store))
 		g.Post("/users", handleCreateUser(store))
 		g.Patch("/users/{username}", handlePatchUser(store))
@@ -56,7 +56,9 @@ func sessionUser(store *Store, r *http.Request) (string, bool) {
 	return store.GetSession(cookie.Value)
 }
 
-func requireAdmin(store *Store) func(http.Handler) http.Handler {
+// RequireAdmin gates a route on role admin/admin (also used by other
+// packages' console endpoints, e.g. internal/bots).
+func RequireAdmin(store *Store) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			username, ok := sessionUser(store, r)

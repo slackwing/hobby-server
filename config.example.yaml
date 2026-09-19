@@ -27,6 +27,22 @@ server:
 #   # site_base_url: "http://127.0.0.1:8765"   # dev only; prod derives from the request
 
 # ============================================================
+# Bots (optional)
+# ============================================================
+# Fake users that use the PUBLIC site API like real players (chat,
+# presence…) — end-to-end testers that keep the site alive. Programs
+# are switched on and off in the console (shared_bot_program). The
+# password is provisioned onto every is_bot account that has none;
+# it is never logged. See internal/bots and README "Bots".
+#
+# bots:
+#   enabled: true
+#   base_url: "https://andrewcheong.com"   # dev: "http://127.0.0.1:5002" with direct: true
+#   direct: false
+#   password: "REPLACE_ME"
+#   tick: "5m"
+
+# ============================================================
 # Projects
 # ============================================================
 # Each project gets its own database, URL prefix, and cookie scope.

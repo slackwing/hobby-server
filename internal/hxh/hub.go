@@ -56,6 +56,7 @@ type Contact struct {
 	Initial     string     `json:"initial"`
 	Color       string     `json:"color"`
 	State       string     `json:"state"`
+	IsBot       bool       `json:"is_bot"`
 	LastSeenAt  *time.Time `json:"last_seen_at"`
 }
 
@@ -137,6 +138,9 @@ type Hub struct {
 	byUser  map[string]map[*hubClient]struct{}
 	states  map[string]string // last announced presence per user
 	now     func() time.Time
+	// OnMessage, when set, is called (in its own goroutine) for every
+	// message the hub stores — the bot service listens here.
+	OnMessage func(Message)
 }
 
 func NewHub(store chatStore, members memberSource) *Hub {
@@ -180,7 +184,7 @@ func (h *Hub) Contacts() ([]Contact, error) {
 	for _, m := range members {
 		state := presenceState(m, h.connected(m.Username), now)
 		h.states[m.Username] = state
-		out = append(out, Contact{Username: m.Username, DisplayName: m.DisplayName, Initial: m.Initial, Color: m.Color, State: state, LastSeenAt: m.LastSeenAt})
+		out = append(out, Contact{Username: m.Username, DisplayName: m.DisplayName, Initial: m.Initial, Color: m.Color, State: state, IsBot: m.IsBot, LastSeenAt: m.LastSeenAt})
 	}
 	return out, nil
 }
@@ -383,6 +387,9 @@ func (h *Hub) handle(c *hubClient, data []byte) {
 			return
 		}
 		h.broadcastRoom(f.Room, map[string]any{"t": "msg", "msg": m}, "")
+		if h.OnMessage != nil {
+			go h.OnMessage(m)
+		}
 	default:
 		c.fail("bad", f.Room)
 	}

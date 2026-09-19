@@ -85,6 +85,15 @@ the shared auth service — one `hobby_server_user` table, per-website
 roles, one SSO session store (`internal/shared/`). That is its job;
 the rule above still applies to every other project's data.
 
+### N8 — Bots use the public API, never a back door
+
+Bot programs (`internal/bots`) act through the same HTTP/WebSocket API
+a browser uses, against the public URL in production — that is the
+point (they are end-to-end testers). Don't add server-side shortcuts
+for them. The single exception is provisioning the configured bot
+password onto `is_bot` accounts (`Store.SetPasswordDirect`, refuses
+non-bots).
+
 ### N7 — Table names carry the project prefix
 
 STANDARD (2026-09, per Andrew): every project-specific table is named

@@ -29,6 +29,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -38,6 +39,7 @@ import (
 
 	"github.com/slackwing/hobby-server/internal/auth"
 	"github.com/slackwing/hobby-server/internal/bap"
+	"github.com/slackwing/hobby-server/internal/bots"
 	"github.com/slackwing/hobby-server/internal/config"
 	"github.com/slackwing/hobby-server/internal/database"
 	"github.com/slackwing/hobby-server/internal/hxh"
@@ -158,6 +160,31 @@ func main() {
 		r.Get(hxhProject.URLPrefix+"/chat/ws", hxhChat.HandleWS())
 	}
 
+	// Bots: fake users that play the site through its PUBLIC API (see
+	// internal/bots). Programs are switched on/off in shared_bot_program.
+	var botSvc *bots.Service
+	if cfg.Bots.Enabled && adminStore != nil {
+		tick := 5 * time.Minute
+		if cfg.Bots.Tick != "" {
+			if d, err := time.ParseDuration(cfg.Bots.Tick); err == nil && d > 0 {
+				tick = d
+			} else {
+				log.Printf("bots: bad tick %q, using %v", cfg.Bots.Tick, tick)
+			}
+		}
+		botSvc = bots.New(adminStore, tick)
+		chatCfg := bots.DefaultChatConfig()
+		chatCfg.Password = cfg.Bots.Password
+		botSvc.Add(bots.NewChatBots(adminStore, &bots.Site{Base: strings.TrimRight(cfg.Bots.BaseURL, "/"), Direct: cfg.Bots.Direct}, chatCfg))
+		if hxhChat != nil {
+			hxhChat.Hub.OnMessage = func(m hxh.Message) {
+				botSvc.Hook(ctx, bots.Event{Kind: "chat.message", Room: m.Room, Sender: m.Sender, Body: m.Body, ID: m.ID})
+			}
+		}
+		go botSvc.Run(ctx)
+		log.Printf("bots: enabled (base=%s direct=%v tick=%v)", cfg.Bots.BaseURL, cfg.Bots.Direct, tick)
+	}
+
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.Timeout(15 * time.Second))
 
@@ -240,6 +267,12 @@ func main() {
 			log.Printf("project %q email: configured=%v", adminProject.Name, email.Configured())
 			r.Route(adminProject.URLPrefix, func(sub chi.Router) {
 				shared.Mount(sub, adminStore, adminProject.CookiePath, secureCookies, email)
+				if botSvc != nil {
+					sub.Group(func(g chi.Router) {
+						g.Use(shared.RequireAdmin(adminStore))
+						bots.Mount(g, botSvc, adminStore)
+					})
+				}
 			})
 		}
 

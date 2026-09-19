@@ -41,6 +41,14 @@ schema-related here, look at how manuscript-studio does it.
   no per-project auth floor — endpoints (`internal/bap/`) are gated
   by the shared **admin** system; any logged-in user reads/writes
   their own cup state.
+- **bots** — not a project but a service in the same binary
+  (`internal/bots`): bot programs driving `is_bot` users through the
+  PUBLIC site API. `hxh_chatbots` is the first (README "Bots"; spec in
+  feathers `foundry/website/docs/HXH_BOTS.md`). Tables `shared_*` in
+  the shared DB: `shared_random_sentences` (public-domain corpus,
+  `cmd/seed-sentences`), `shared_bot_program` (on/off per program,
+  console toggle). `shared_` is the prefix for cross-project DATA
+  tables; `hobby_server_` stays the auth system's.
 - **admin** — the SHARED cross-website auth system
   (`internal/shared/`, console at
   [andrewcheong.com/admin](https://andrewcheong.com/admin)). One
@@ -83,6 +91,15 @@ state, etc.) as needed.
   `last_seen_at` (touched by `Store.GetSession`, throttled) and
   `activated_at` (set by `ConsumeToken` on the first password) —
   admin changeset 006.
+- `internal/bots/` — the bot service: `service.go` (scheduler, program
+  registry, hooks), `site.go` (the public API as a client: login,
+  contacts, history, WebSocket typing/send), `chatbots.go`
+  (`hxh_chatbots` — the maths and the speech act; tests in
+  `chatbots_test.go` with a fake site and a scripted die),
+  `handlers.go` (console endpoints). The hub calls `Hub.OnMessage` for
+  every stored message; main wires it to `Service.Hook`. Bot passwords
+  are provisioned from `bots.password` (config) — the one bot-specific
+  act; everything else is what a browser does.
 - `internal/shared/` — the shared auth system (users with
   initial/colour/email profile fields, roles, sessions, links) and
   `email.go`, which fetches each website's `_email/` templates over

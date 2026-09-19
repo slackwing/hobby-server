@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        Bots (2026-09-19, Andrew): fake users that "chat and do other
+        things on the website" as end-to-end testers.
+
+          - hobby_server_user.is_bot: the console lists bots after real
+            users, under a divider.
+          - hobby_server_user.metadata: a generic JSON key/value blob;
+            the chat bots read "talkativity" (0..1 — a min and a max,
+            not never/always) from it.
+          - the thirteen bots, named after The Brothers Karamazov and
+            The Idiot, all with role "player" on hxh (a new hxh role).
+            Their talkativity is Andrew's reading of the characters.
+          - shared_random_sentences: lines from public-domain
+            children's books (Carroll, Lear, Potter, Grahame, Milne,
+            Baum, Barrie, Kipling, Collodi, Grimm, Andersen, Aesop…),
+            filled by cmd/seed-sentences. "shared_" is the prefix for
+            cross-project data tables (hobby_server_ stays the auth
+            system's).
+          - shared_bot_program: the registry of bot programs, so each
+            can be switched on and off from the console; the first is
+            hxh_chatbots.
+    -->
+
+    <changeSet id="007-bots" author="admin">
+        <addColumn tableName="hobby_server_user">
+            <column name="is_bot" type="BOOLEAN" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+            <column name="metadata" type="JSONB" defaultValue="{}">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+
+        <insert tableName="hobby_server_website_roles">
+            <column name="website" value="hxh"/>
+            <column name="role" value="player"/>
+        </insert>
+
+        <sql>
+            INSERT INTO hobby_server_user (username, display_name, initial, color, active_site, is_bot, metadata) VALUES
+              ('alyosha',   'Alyosha',   'AL', '#7c4dff', 'hxh', true, '{"talkativity": 0.5}'),
+              ('dmitri',    'Dmitri',    'DM', '#ff5a36', 'hxh', true, '{"talkativity": 0.9}'),
+              ('ivan',      'Ivan',      'IV', '#37d0ff', 'hxh', true, '{"talkativity": 0.6}'),
+              ('fyodor',    'Fyodor',    'FY', '#c8102e', 'hxh', true, '{"talkativity": 0.95}'),
+              ('zosima',    'Zosima',    'ZO', '#d9a520', 'hxh', true, '{"talkativity": 0.4}'),
+              ('katerina',  'Katerina',  'KA', '#ff7ad9', 'hxh', true, '{"talkativity": 0.7}'),
+              ('lizaveta',  'Lizaveta',  'LI', '#ff7518', 'hxh', true, '{"talkativity": 0.9}'),
+              ('nikolai',   'Nikolai',   'NI', '#58e05c', 'hxh', true, '{"talkativity": 0.85}'),
+              ('ilyusha',   'Ilyusha',   'IL', '#9fd8c8', 'hxh', true, '{"talkativity": 0.3}'),
+              ('nastasya',  'Nastasya',  'NA', '#d63a6a', 'hxh', true, '{"talkativity": 0.8}'),
+              ('aglaya',    'Aglaya',    'AG', '#ffd166', 'hxh', true, '{"talkativity": 0.7}'),
+              ('alexandra', 'Alexandra', 'AX', '#3b6b8c', 'hxh', true, '{"talkativity": 0.35}'),
+              ('adelaida',  'Adelaida',  'AD', '#c09bff', 'hxh', true, '{"talkativity": 0.4}')
+            ON CONFLICT (username) DO NOTHING;
+            INSERT INTO hobby_server_user_roles (username, website, role)
+              SELECT username, 'hxh', 'player' FROM hobby_server_user WHERE is_bot
+            ON CONFLICT DO NOTHING;
+        </sql>
+
+        <createTable tableName="shared_random_sentences">
+            <column name="id" type="BIGINT" autoIncrement="true">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="sentence" type="TEXT">
+                <constraints nullable="false" unique="true" uniqueConstraintName="uq_shared_random_sentences_sentence"/>
+            </column>
+            <column name="source" type="VARCHAR(120)" defaultValue="">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <createTable tableName="shared_bot_program">
+            <column name="name" type="VARCHAR(50)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="enabled" type="BOOLEAN" defaultValueBoolean="true">
+                <constraints nullable="false"/>
+            </column>
+            <column name="config" type="JSONB" defaultValue="{}">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <insert tableName="shared_bot_program">
+            <column name="name" value="hxh_chatbots"/>
+        </insert>
+    </changeSet>
+
+</databaseChangeLog>
