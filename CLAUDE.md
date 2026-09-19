@@ -96,13 +96,16 @@ state, etc.) as needed.
   skill) / uploaded / cropped / pixelated / upscaled / transparent with
   `source_image_id` lineage; sha256 unique per character) and
   `hxh_char_review` (the verdict log, per version) — changesets 006
+  to 008 (`card_description`: what the Greed Island card prints)
   and 007 (`owner` on all three tables: the bot user `claude` for what
   the skill finds, Andrew/Abi for uploads, crops and verdicts). API
   `/api/hxh/db/*`; writes need hxh admin OR the site-wide `admin` role
   (how `claude` writes without an hxh role), picture reads any hxh
   role; `POST /chars/{id}/review` passes a verdict (reason optional)
   and never bumps the version; the server does the cropping (exact
-  source pixels, PNG). Pure parts tested in `rosterdb_test.go`.
+  source pixels, PNG). `GET /db/binder` (any hxh role) is the Binder's
+  source: the accepted characters' card fields only. Pure parts tested
+  in `rosterdb_test.go`.
   The 2026-09-17 `hxh_characters` roster tables stay as a cross-check
   source.
 - `internal/hxh/chat.go` + `hub.go` — the chat endpoints, profile-run
