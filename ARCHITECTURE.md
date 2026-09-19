@@ -28,10 +28,12 @@ plugs in by adding a config entry + a changelog dir.
   [feathers RV trip site](https://andrewcheong.com/rv).
   Frontend in `slackwing/feathers`:
   `foundry/website/html/rv/`.
-- **hxh** — auth for the
-  [Hunter × Halloween party site](https://andrewcheong.com/hxh).
-  Frontend in `slackwing/feathers`:
-  `foundry/website/html/hxh/`.
+- **hxh** — data for the
+  [Hunter × Halloween party site](https://andrewcheong.com/hxh):
+  the character roster and the Beetle chat (REST + a WebSocket hub at
+  `/api/hxh/chat/ws`, the one long-lived connection this server holds;
+  Apache proxies it with `mod_proxy_wstunnel`). Frontend in
+  `slackwing/feathers`: `foundry/website/html/hxh/`.
 - **bap** — cup state for the
   [bongo-cat table-bap site](https://andrewcheong.com/bap).
   Frontend in `slackwing/feathers`: `foundry/website/html/bap/`.

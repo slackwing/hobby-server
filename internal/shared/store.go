@@ -22,6 +22,7 @@ import (
 	"net/mail"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -174,6 +175,22 @@ type Account struct {
 	Email        string
 	ActiveSite   string // the website the console acts on for this user; "" = none
 	PasswordHash *string
+	// ActivatedAt is when the account first got a password (nil until
+	// then); LastSeenAt the last authenticated request (nil = never).
+	ActivatedAt *time.Time
+	LastSeenAt  *time.Time
+}
+
+// Member is a user seen from one website's point of view — what its
+// chat contacts list shows. No email, no roles.
+type Member struct {
+	Username    string     `json:"username"`
+	DisplayName string     `json:"display_name"`
+	Initial     string     `json:"initial"`
+	Color       string     `json:"color"`
+	HasPassword bool       `json:"has_password"`
+	LastSeenAt  *time.Time `json:"last_seen_at"`
+	ActivatedAt *time.Time `json:"activated_at"`
 }
 
 type Website struct {
@@ -183,10 +200,17 @@ type Website struct {
 
 type Store struct {
 	pool *pgxpool.Pool
+	// seen throttles last_seen_at writes: one UPDATE per user per
+	// seenEvery, however many requests they make.
+	seenMu sync.Mutex
+	seen   map[string]time.Time
 }
 
+// seenEvery is how often a user's last_seen_at is actually written.
+const seenEvery = 20 * time.Second
+
 func NewStore(pool *pgxpool.Pool) *Store {
-	s := &Store{pool: pool}
+	s := &Store{pool: pool, seen: map[string]time.Time{}}
 	go s.cleanupExpired()
 	return s
 }
@@ -203,9 +227,11 @@ func (s *Store) GetUser(username string) (*Account, error) {
 	defer cancel()
 	var a Account
 	err := s.pool.QueryRow(ctx, `
-		SELECT username, display_name, initial, color, COALESCE(email, ''), COALESCE(active_site, ''), password_hash
+		SELECT username, display_name, initial, color, COALESCE(email, ''), COALESCE(active_site, ''), password_hash,
+		       activated_at, last_seen_at
 		FROM hobby_server_user WHERE username = $1
-	`, username).Scan(&a.Username, &a.DisplayName, &a.Initial, &a.Color, &a.Email, &a.ActiveSite, &a.PasswordHash)
+	`, username).Scan(&a.Username, &a.DisplayName, &a.Initial, &a.Color, &a.Email, &a.ActiveSite, &a.PasswordHash,
+		&a.ActivatedAt, &a.LastSeenAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -262,6 +288,62 @@ func (s *Store) ListUsers() ([]User, error) {
 		}
 	}
 	return users, rrows.Err()
+}
+
+// ListMembers returns every user holding any role on `website`, by
+// display name — the chat contacts list.
+func (s *Store) ListMembers(website string) ([]Member, error) {
+	ctx, cancel := withCtx()
+	defer cancel()
+	rows, err := s.pool.Query(ctx, `
+		SELECT u.username, u.display_name, u.initial, u.color, u.password_hash IS NOT NULL, u.last_seen_at, u.activated_at
+		FROM hobby_server_user u
+		WHERE EXISTS (SELECT 1 FROM hobby_server_user_roles r WHERE r.username = u.username AND r.website = $1)
+		ORDER BY LOWER(u.display_name), u.username
+	`, website)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Member{}
+	for rows.Next() {
+		var m Member
+		if err := rows.Scan(&m.Username, &m.DisplayName, &m.Initial, &m.Color, &m.HasPassword, &m.LastSeenAt, &m.ActivatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// IsMember reports whether the user holds any role on the website.
+func (s *Store) IsMember(username, website string) (bool, error) {
+	ctx, cancel := withCtx()
+	defer cancel()
+	var n int
+	err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM hobby_server_user_roles WHERE username = $1 AND website = $2
+	`, username, website).Scan(&n)
+	return n > 0, err
+}
+
+// TouchLastSeen records activity for presence, at most once per
+// seenEvery per user (any authenticated request calls it).
+func (s *Store) TouchLastSeen(username string) {
+	now := time.Now().UTC()
+	s.seenMu.Lock()
+	last, ok := s.seen[username]
+	if ok && now.Sub(last) < seenEvery {
+		s.seenMu.Unlock()
+		return
+	}
+	s.seen[username] = now
+	s.seenMu.Unlock()
+	ctx, cancel := withCtx()
+	defer cancel()
+	if _, err := s.pool.Exec(ctx, `UPDATE hobby_server_user SET last_seen_at = $1 WHERE username = $2`, now, username); err != nil {
+		log.Printf("[admin] last_seen update error: %v", err)
+	}
 }
 
 // CreateUser inserts an account (password unset). Email "" is stored
@@ -480,6 +562,7 @@ func (s *Store) GetSession(token string) (string, bool) {
 	_, _ = s.pool.Exec(ctx, `
 		UPDATE hobby_server_session SET last_activity_at = $1, expires_at = $2 WHERE id = $3
 	`, now, newExpires, token)
+	s.TouchLastSeen(username)
 	return username, true
 }
 
@@ -580,8 +663,10 @@ func (s *Store) ConsumeToken(code, passwordHash string) (username, website, kind
 	if err != nil {
 		return "", "", "", false, err
 	}
+	// The first password activates the account (chat visibility starts
+	// here); a later reset leaves activated_at alone.
 	if _, err := tx.Exec(ctx, `
-		UPDATE hobby_server_user SET password_hash = $1 WHERE username = $2
+		UPDATE hobby_server_user SET password_hash = $1, activated_at = COALESCE(activated_at, NOW()) WHERE username = $2
 	`, passwordHash, username); err != nil {
 		return "", "", "", false, err
 	}

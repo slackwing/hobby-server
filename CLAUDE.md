@@ -26,7 +26,14 @@ schema-related here, look at how manuscript-studio does it.
   unused — the site logs in via the shared **admin** system below.
   The `hxh` DB holds the character roster (`hxh_characters`, mirrored
   from feathers `html/hxh/roster.json`, the master; card fields since
-  changeset 004 — see feathers `foundry/website/hxh-roster/CHARACTER.md`).
+  changeset 004 — see feathers `foundry/website/hxh-roster/CHARACTER.md`)
+  and, since changeset 005 (2026-09-18), the **Beetle chat**:
+  `hxh_chat_message` (kept forever, `deleted_at` = unsent) and
+  `hxh_chat_profile` (JSON runs). Realtime is a WebSocket hub
+  (`internal/hxh/hub.go`, one per process) at `/api/hxh/chat/ws`,
+  mounted OUTSIDE the request timeout; Apache proxies that path via
+  `mod_proxy_wstunnel`. Any role on hxh may chat. Spec: feathers
+  `foundry/website/docs/HXH_CHAT.md`; frontend `html/hxh/apps/chat/`.
 - **bap** — the
   [bongo-cat table-bap site](https://andrewcheong.com/bap).
   Frontend: same feathers repo at `foundry/website/html/bap/`.
@@ -70,6 +77,12 @@ state, etc.) as needed.
   project, never edit landed changesets). Table names carry the
   project prefix (`hxh_characters`, not `characters`) — see
   AGENTS.md N7; rv's unprefixed tables are grandfathered.
+- `internal/hxh/chat.go` + `hub.go` — the chat endpoints, profile-run
+  validation and the WebSocket hub (tests: `hub_test.go`, `go test
+  ./internal/hxh/`). Presence lives in the SHARED user table:
+  `last_seen_at` (touched by `Store.GetSession`, throttled) and
+  `activated_at` (set by `ConsumeToken` on the first password) —
+  admin changeset 006.
 - `internal/shared/` — the shared auth system (users with
   initial/colour/email profile fields, roles, sessions, links) and
   `email.go`, which fetches each website's `_email/` templates over

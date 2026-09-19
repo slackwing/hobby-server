@@ -8,9 +8,9 @@
 // ~/.config/hobby-server/config.yaml (URL paths shown relative to the
 // project's URLPrefix):
 //
-//   POST <prefix>/login    {username, password}  → sets <name>_session cookie
-//   POST <prefix>/logout                           → clears cookie + deletes session
-//   GET  <prefix>/me                               → {username} when logged in, 401 otherwise
+//	POST <prefix>/login    {username, password}  → sets <name>_session cookie
+//	POST <prefix>/logout                           → clears cookie + deletes session
+//	GET  <prefix>/me                               → {username} when logged in, 401 otherwise
 //
 // Apache reverse-proxies the public URL slice to this server. For the
 // "rv" project with url_prefix "/api/rv", Apache maps
@@ -137,7 +137,6 @@ func main() {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(15 * time.Second))
 	// API responses are session-scoped and dynamic — never cache them
 	// (browser heuristic caching applies when no header is set).
 	r.Use(func(next http.Handler) http.Handler {
@@ -147,118 +146,134 @@ func main() {
 		})
 	})
 
-	// One sub-router per project, mounted at the configured URL prefix.
-	for _, s := range states {
-		s := s // capture in closure
-		r.Route(s.project.URLPrefix, func(sub chi.Router) {
-			sub.Post("/login", handleLogin(s.pool, s.store, s.project, s.cookieName))
-			sub.Post("/logout", handleLogout(s.store, s.project, s.cookieName))
-			sub.Get("/me", handleMe(s.store, s.cookieName))
+	// hxh chat: the WebSocket lives OUTSIDE the per-request timeout below
+	// (a connection stays up for hours); its request/response endpoints
+	// mount with the rest of hxh inside it.
+	var hxhStore *hxh.Store
+	var hxhChat *hxh.Chat
+	if hxhProject != nil && adminStore != nil {
+		hxhStore = hxh.NewStore(hxhPool)
+		hxhChat = hxh.NewChat(hxhStore, adminStore)
+		go hxhChat.Hub.Run(ctx, 20*time.Second)
+		r.Get(hxhProject.URLPrefix+"/chat/ws", hxhChat.HandleWS())
+	}
 
-			// Project-specific routes. Today only "rv" has a prep-checklist
-			// feature; if a second project grows its own endpoints we'll
-			// refactor this into a plugin pattern.
-			if s.project.Name == "rv" {
-				prepStore := prep.NewStore(s.pool)
-				// Public read.
-				sub.Get("/prep", prep.HandleList(prepStore))
-				// Authed writes — wrap each handler with the session middleware.
-				authMW := auth.Middleware(s.store, s.cookieName)
-				sub.With(authMW).Post("/prep", prep.HandleCreate(prepStore))
-				sub.With(authMW).Patch("/prep/{id}", prep.HandlePatch(prepStore))
-				sub.With(authMW).Delete("/prep/{id}", prep.HandleDelete(prepStore))
-				sub.With(authMW).Post("/prep/sections", prep.HandleCreateSection(prepStore))
-				sub.With(authMW).Patch("/prep/sections/{id}", prep.HandlePatchSection(prepStore))
-				sub.With(authMW).Delete("/prep/sections/{id}", prep.HandleDeleteSection(prepStore))
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.Timeout(15 * time.Second))
 
-				// rvedit: editable overlay over the static catalog +
-				// itinerary. See internal/rvedit/rvedit.go.
-				rvStore := rvedit.NewStore(s.pool)
-				sub.Get("/locations", rvedit.HandleListLocations(rvStore))
-				sub.With(authMW).Post("/locations", rvedit.HandleCreateLocation(rvStore))
-				sub.With(authMW).Patch("/locations/{id}", rvedit.HandlePatchLocation(rvStore))
-				sub.With(authMW).Delete("/locations/{id}", rvedit.HandleDeleteLocation(rvStore))
-				sub.Get("/itinerary", rvedit.HandleListItinerary(rvStore))
-				sub.With(authMW).Post("/itinerary", rvedit.HandleUpsertItinerary(rvStore))
-				sub.With(authMW).Patch("/itinerary/{id}", rvedit.HandlePatchItinerary(rvStore))
-				sub.With(authMW).Delete("/itinerary/{id}", rvedit.HandleDeleteItinerary(rvStore))
-				sub.Get("/note", rvedit.HandleGetNote(rvStore))
-				sub.With(authMW).Put("/note", rvedit.HandlePutNote(rvStore))
-				// Trip-over lockdown (2026-07-30): check-ins, dunkin
-				// sighting logs, and bet edits are frozen — the trip
-				// is done and the record shouldn't change. Reads stay
-				// public so the site keeps rendering history. Prep /
-				// itinerary / location / note editing stays live for
-				// corrections.
-				locked := func(w http.ResponseWriter, _ *http.Request) {
-					w.Header().Set("Content-Type", "application/json")
-					w.WriteHeader(http.StatusForbidden)
-					_, _ = w.Write([]byte(`{"error":"locked: the trip is over"}`))
+		// One sub-router per project, mounted at the configured URL prefix.
+		for _, s := range states {
+			s := s // capture in closure
+			r.Route(s.project.URLPrefix, func(sub chi.Router) {
+				sub.Post("/login", handleLogin(s.pool, s.store, s.project, s.cookieName))
+				sub.Post("/logout", handleLogout(s.store, s.project, s.cookieName))
+				sub.Get("/me", handleMe(s.store, s.cookieName))
+
+				// Project-specific routes. Today only "rv" has a prep-checklist
+				// feature; if a second project grows its own endpoints we'll
+				// refactor this into a plugin pattern.
+				if s.project.Name == "rv" {
+					prepStore := prep.NewStore(s.pool)
+					// Public read.
+					sub.Get("/prep", prep.HandleList(prepStore))
+					// Authed writes — wrap each handler with the session middleware.
+					authMW := auth.Middleware(s.store, s.cookieName)
+					sub.With(authMW).Post("/prep", prep.HandleCreate(prepStore))
+					sub.With(authMW).Patch("/prep/{id}", prep.HandlePatch(prepStore))
+					sub.With(authMW).Delete("/prep/{id}", prep.HandleDelete(prepStore))
+					sub.With(authMW).Post("/prep/sections", prep.HandleCreateSection(prepStore))
+					sub.With(authMW).Patch("/prep/sections/{id}", prep.HandlePatchSection(prepStore))
+					sub.With(authMW).Delete("/prep/sections/{id}", prep.HandleDeleteSection(prepStore))
+
+					// rvedit: editable overlay over the static catalog +
+					// itinerary. See internal/rvedit/rvedit.go.
+					rvStore := rvedit.NewStore(s.pool)
+					sub.Get("/locations", rvedit.HandleListLocations(rvStore))
+					sub.With(authMW).Post("/locations", rvedit.HandleCreateLocation(rvStore))
+					sub.With(authMW).Patch("/locations/{id}", rvedit.HandlePatchLocation(rvStore))
+					sub.With(authMW).Delete("/locations/{id}", rvedit.HandleDeleteLocation(rvStore))
+					sub.Get("/itinerary", rvedit.HandleListItinerary(rvStore))
+					sub.With(authMW).Post("/itinerary", rvedit.HandleUpsertItinerary(rvStore))
+					sub.With(authMW).Patch("/itinerary/{id}", rvedit.HandlePatchItinerary(rvStore))
+					sub.With(authMW).Delete("/itinerary/{id}", rvedit.HandleDeleteItinerary(rvStore))
+					sub.Get("/note", rvedit.HandleGetNote(rvStore))
+					sub.With(authMW).Put("/note", rvedit.HandlePutNote(rvStore))
+					// Trip-over lockdown (2026-07-30): check-ins, dunkin
+					// sighting logs, and bet edits are frozen — the trip
+					// is done and the record shouldn't change. Reads stay
+					// public so the site keeps rendering history. Prep /
+					// itinerary / location / note editing stays live for
+					// corrections.
+					locked := func(w http.ResponseWriter, _ *http.Request) {
+						w.Header().Set("Content-Type", "application/json")
+						w.WriteHeader(http.StatusForbidden)
+						_, _ = w.Write([]byte(`{"error":"locked: the trip is over"}`))
+					}
+					sub.Get("/checkins", rvedit.HandleListCheckins(rvStore))
+					sub.Post("/checkins", locked)
+					sub.Get("/dunkin", rvedit.HandleListDunkin(rvStore))
+					sub.Post("/dunkin", locked)
+					sub.Get("/dunkin/participants", rvedit.HandleListDunkinParticipants(rvStore))
+					sub.Post("/dunkin/participants", locked)
+					sub.Patch("/dunkin/participants/{id}", locked)
+					sub.Delete("/dunkin/participants/{id}", locked)
+					// Public read + public write (with per-IP rate limit on
+					// the server side) so anyone on the internet can doodle.
+					sub.Get("/draw/canvas", rvedit.HandleGetDrawCanvas(rvStore))
+					sub.Get("/draw/strokes", rvedit.HandleListDrawStrokes(rvStore))
+					sub.Post("/draw/strokes", rvedit.HandleCreateDrawStroke(rvStore))
 				}
-				sub.Get("/checkins", rvedit.HandleListCheckins(rvStore))
-				sub.Post("/checkins", locked)
-				sub.Get("/dunkin", rvedit.HandleListDunkin(rvStore))
-				sub.Post("/dunkin", locked)
-				sub.Get("/dunkin/participants", rvedit.HandleListDunkinParticipants(rvStore))
-				sub.Post("/dunkin/participants", locked)
-				sub.Patch("/dunkin/participants/{id}", locked)
-				sub.Delete("/dunkin/participants/{id}", locked)
-				// Public read + public write (with per-IP rate limit on
-				// the server side) so anyone on the internet can doodle.
-				sub.Get("/draw/canvas", rvedit.HandleGetDrawCanvas(rvStore))
-				sub.Get("/draw/strokes", rvedit.HandleListDrawStrokes(rvStore))
-				sub.Post("/draw/strokes", rvedit.HandleCreateDrawStroke(rvStore))
-			}
-		})
-	}
-
-	if adminProject != nil {
-		// Server-wide SMTP sender for templated emails (invites,
-		// welcomes). Unconfigured = the console's send buttons 503.
-		email := &shared.Email{
-			Mailer: mailer.Mailer{
-				Host: cfg.Email.SMTPHost, Port: cfg.Email.SMTPPort,
-				Username: cfg.Email.Username, Password: cfg.Email.Password,
-				From: cfg.Email.From,
-			},
-			BaseURL: cfg.Email.SiteBaseURL,
-		}
-		log.Printf("project %q email: configured=%v", adminProject.Name, email.Configured())
-		r.Route(adminProject.URLPrefix, func(sub chi.Router) {
-			shared.Mount(sub, adminStore, adminProject.CookiePath, secureCookies, email)
-		})
-	}
-
-	if hxhProject != nil {
-		if adminStore == nil {
-			log.Printf("project %q: shared auth (admin project) not configured; hxh endpoints NOT mounted", hxhProject.Name)
-		} else {
-			hxhStore := hxh.NewStore(hxhPool)
-			r.Route(hxhProject.URLPrefix, func(sub chi.Router) {
-				hxh.Mount(sub, hxhStore, adminStore)
 			})
 		}
-	}
 
-	if bapProject != nil {
-		if adminStore == nil {
-			log.Printf("project %q: shared auth (admin project) not configured; bap endpoints NOT mounted", bapProject.Name)
-		} else {
-			bapStore := bap.NewStore(bapPool)
-			notify := bap.Notifier{
-				BotToken: bapProject.Telegram.BotToken,
-				ChatID:   bapProject.Telegram.ChatID,
+		if adminProject != nil {
+			// Server-wide SMTP sender for templated emails (invites,
+			// welcomes). Unconfigured = the console's send buttons 503.
+			email := &shared.Email{
+				Mailer: mailer.Mailer{
+					Host: cfg.Email.SMTPHost, Port: cfg.Email.SMTPPort,
+					Username: cfg.Email.Username, Password: cfg.Email.Password,
+					From: cfg.Email.From,
+				},
+				BaseURL: cfg.Email.SiteBaseURL,
 			}
-			r.Route(bapProject.URLPrefix, func(sub chi.Router) {
-				bap.Mount(sub, bapStore, adminStore, notify)
+			log.Printf("project %q email: configured=%v", adminProject.Name, email.Configured())
+			r.Route(adminProject.URLPrefix, func(sub chi.Router) {
+				shared.Mount(sub, adminStore, adminProject.CookiePath, secureCookies, email)
 			})
 		}
-	}
 
-	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
-	})
+		if hxhProject != nil {
+			if adminStore == nil {
+				log.Printf("project %q: shared auth (admin project) not configured; hxh endpoints NOT mounted", hxhProject.Name)
+			} else {
+				r.Route(hxhProject.URLPrefix, func(sub chi.Router) {
+					hxh.Mount(sub, hxhStore, adminStore)
+					hxhChat.Mount(sub)
+				})
+			}
+		}
+
+		if bapProject != nil {
+			if adminStore == nil {
+				log.Printf("project %q: shared auth (admin project) not configured; bap endpoints NOT mounted", bapProject.Name)
+			} else {
+				bapStore := bap.NewStore(bapPool)
+				notify := bap.Notifier{
+					BotToken: bapProject.Telegram.BotToken,
+					ChatID:   bapProject.Telegram.ChatID,
+				}
+				r.Route(bapProject.URLPrefix, func(sub chi.Router) {
+					bap.Mount(sub, bapStore, adminStore, notify)
+				})
+			}
+		}
+
+		r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("ok"))
+		})
+	}) // end of the timed group
 
 	srv := &http.Server{
 		Addr:              ":" + strconv.Itoa(cfg.Server.Port),

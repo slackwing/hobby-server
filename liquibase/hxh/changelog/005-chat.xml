@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        The chat app (2026-09-18; spec in feathers
+        foundry/website/docs/HXH_CHAT.md). Messages are kept forever;
+        "unsend" soft-deletes (deleted_at) so both parties stop seeing
+        the row. room is "global" or "dm:<a>:<b>" with the two usernames
+        sorted. Profiles are the AIM-style styled text, stored as our own
+        JSON run format (never HTML), so rendering is safe by
+        construction. Usernames reference the SHARED auth DB, so there
+        is no foreign key here (project isolation, AGENTS.md N6).
+    -->
+
+    <changeSet id="005-chat" author="hxh">
+        <createTable tableName="hxh_chat_message">
+            <column name="id" type="BIGINT" autoIncrement="true">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="room" type="VARCHAR(120)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="sender" type="VARCHAR(50)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="body" type="TEXT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+            <column name="deleted_at" type="TIMESTAMPTZ"/>
+        </createTable>
+        <createIndex tableName="hxh_chat_message" indexName="idx_hxh_chat_message_room_created">
+            <column name="room"/>
+            <column name="created_at"/>
+        </createIndex>
+
+        <createTable tableName="hxh_chat_profile">
+            <column name="username" type="VARCHAR(50)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="runs" type="JSONB" defaultValue="[]">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+    </changeSet>
+
+</databaseChangeLog>

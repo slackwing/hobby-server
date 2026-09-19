@@ -21,5 +21,6 @@
     <include file="changelog/003-bap-website.xml"/>
     <include file="changelog/004-user-profile.xml"/>
     <include file="changelog/005-token-kind-active-site.xml"/>
+    <include file="changelog/006-presence-activation.xml"/>
 
 </databaseChangeLog>

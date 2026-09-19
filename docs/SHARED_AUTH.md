@@ -234,3 +234,13 @@ it the console says "email not configured" and sends 503.
   (any SMTP sink) and `site_base_url` pointing at a local static
   server that serves the feathers `html/` tree and proxies
   `/admin/api/*` to the Go server.
+
+### Presence and activation (2026-09-18)
+
+`hobby_server_user` also carries `last_seen_at` — bumped by every
+authenticated request through `Store.GetSession`, on any website, at
+most once per 20 s per user — and `activated_at`, set the first time
+an account gets a password (`ConsumeToken`). hxh's chat derives
+presence tiers from the former and message visibility from the latter
+(`Store.ListMembers(website)`, `IsMember`, `TouchLastSeen`). Other
+sites may read them the same way; nothing else writes them.

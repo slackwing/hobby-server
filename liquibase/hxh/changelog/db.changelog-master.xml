@@ -14,5 +14,6 @@
     <include file="changelog/002-hxh-prefix.xml"/>
     <include file="changelog/003-roster.xml"/>
     <include file="changelog/004-character-card-fields.xml"/>
+    <include file="changelog/005-chat.xml"/>
 
 </databaseChangeLog>

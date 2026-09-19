@@ -13,7 +13,7 @@
 #
 # SCRIPT_VERSION: bump on EVERY change to this file.
 # Format: YYYY-MM-DD.N (N increments within the same day).
-SCRIPT_VERSION="2026-06-21.2"
+SCRIPT_VERSION="2026-09-18.1"
 
 set -euo pipefail
 

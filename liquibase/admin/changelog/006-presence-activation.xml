@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        2026-09-18, for the hxh chat app (feathers html/hxh/apps/chat):
+
+          - last_seen_at: bumped (throttled) on every authenticated
+            request through the shared session store, on any website.
+            Presence tiers derive from it: < 1 min online, < 1 hour
+            away, else offline.
+          - activated_at: when the account first got a password (its
+            invite was accepted). A user only ever sees chat written
+            after this moment — nothing from before they appeared in the
+            contacts list. Backfilled to created_at for accounts that
+            already have a password.
+    -->
+
+    <changeSet id="006-presence-activation" author="admin">
+        <addColumn tableName="hobby_server_user">
+            <column name="last_seen_at" type="TIMESTAMPTZ"/>
+            <column name="activated_at" type="TIMESTAMPTZ"/>
+        </addColumn>
+        <sql>UPDATE hobby_server_user SET activated_at = created_at WHERE password_hash IS NOT NULL;</sql>
+    </changeSet>
+
+</databaseChangeLog>

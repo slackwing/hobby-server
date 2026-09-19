@@ -26,7 +26,11 @@ discipline, Cloud SQL via the Cloud SQL Auth Proxy.
 - **hxh** — auth for the
   [Hunter × Halloween party site](https://github.com/slackwing/feathers/tree/master/foundry/website/html/hxh).
   Database: `hxh`. URL prefix: `/api/hxh` (Apache rewrites public
-  `/hxh/api/*` to this). Cookie path: `/hxh/`.
+  `/hxh/api/*` to this). Cookie path: `/hxh/`. Also hosts the site's
+  **Beetle** chat: a WebSocket hub (`internal/hxh/hub.go`) at
+  `/api/hxh/chat/ws` — Apache must proxy that one path with
+  `mod_proxy_wstunnel` (see Endpoints) — plus `hxh_chat_message` /
+  `hxh_chat_profile`.
 - **bap** — data for the
   [bongo-cat table-bap site](https://github.com/slackwing/feathers/tree/master/foundry/website/html/bap).
   Database: `bap`. URL prefix: `/api/bap` (Apache rewrites public
@@ -49,6 +53,33 @@ For each project P, three endpoints under its `url_prefix`:
   otherwise
 
 Plus `GET /healthz` at the server root (used by Docker healthcheck).
+
+### hxh chat (shared-auth session with any role on `hxh`)
+
+- `GET  /api/hxh/chat/contacts` — every hxh member with presence
+  (`online` < 1 min of activity or a live socket, `away` < 1 h,
+  `offline`, `nopass` = no password yet)
+- `GET  /api/hxh/chat/history?room=global|dm:<a>:<b>` — the last 100
+  live messages written after the viewer's `activated_at`
+- `GET  /api/hxh/chat/profile/{username}` / `PUT /api/hxh/chat/profile`
+  `{runs:[…]}` — AIM-style profiles in a JSON "runs" format (never
+  HTML), ≤ 1024 characters
+- `GET  /api/hxh/chat/ws` — the WebSocket: `msg`, `typing`, `unsend`,
+  `ping` in; `hello`, `msg`, `typing`, `unsend`, `presence`, `pong`,
+  `error` out (frame shapes at the top of `internal/hxh/hub.go`).
+  Mounted outside the 15 s request timeout. Apache needs
+  `a2enmod proxy_wstunnel` and, after the `/hxh/api` block:
+
+  ```
+  <Location /hxh/api/chat/ws>
+      ProxyPass ws://127.0.0.1:5002/api/hxh/chat/ws
+      ProxyPreserveHost On
+  </Location>
+  ```
+
+Presence comes from `hobby_server_user.last_seen_at`, bumped (at most
+every 20 s) by every authenticated request on any website;
+`activated_at` is set when an account first gets a password.
 
 ## Install (production)
 
