@@ -14,6 +14,7 @@
 //	POST   /hxh/api/db/chars/{id}/review        {status, reason} — the verdict on the current version
 //	DELETE /hxh/api/db/chars/{id}
 //	POST   /hxh/api/db/chars/{id}/images        upload (multipart "file" or raw body)
+//	GET    /hxh/api/db/binder                   accepted characters, card fields only (any hxh role) — the Binder's source
 //	GET    /hxh/api/db/images/{id}              the picture (any hxh role)
 //	GET    /hxh/api/db/images/{id}/thumb        its preview (any hxh role)
 //	GET    /hxh/api/db/images/{id}/meta         its row (what the crop page shows)
@@ -92,6 +93,7 @@ type Char struct {
 	Arcs          []string       `json:"arcs"`
 	Arms          []string       `json:"arms"`
 	Description   string         `json:"description"`
+	CardDesc      string         `json:"card_description"`
 	Notes         string         `json:"notes"`
 	Version       int            `json:"version"`
 	ReviewStatus  string         `json:"review_status"`
@@ -320,7 +322,7 @@ func isUnique(err error) bool {
 }
 
 const charCols = `c.id, c.name, c.name_ja, c.first, c.rank, c.nen_types, c.affiliation, c.arcs, c.arms,
-	c.description, c.notes, c.version, c.review_status, c.review_reason, c.avatar_image_id, c.card_image_id, c.owner, c.created_at, c.updated_at,
+	c.description, c.card_description, c.notes, c.version, c.review_status, c.review_reason, c.avatar_image_id, c.card_image_id, c.owner, c.created_at, c.updated_at,
 	(SELECT count(*) FROM hxh_char_image i WHERE i.char_id = c.id),
 	COALESCE((SELECT json_object_agg(t.type, t.n) FROM (SELECT type, count(*) AS n FROM hxh_char_image i WHERE i.char_id = c.id GROUP BY type) t), '{}'::json)`
 
@@ -329,7 +331,7 @@ func scanChar(row pgx.Row) (*Char, error) {
 	var nen, arcs, arms string
 	var counts []byte
 	if err := row.Scan(&c.ID, &c.Name, &c.NameJA, &c.First, &c.Rank, &nen, &c.Affiliation, &arcs, &arms,
-		&c.Description, &c.Notes, &c.Version, &c.ReviewStatus, &c.ReviewReason, &c.AvatarImageID, &c.CardImageID, &c.Owner, &c.CreatedAt, &c.UpdatedAt,
+		&c.Description, &c.CardDesc, &c.Notes, &c.Version, &c.ReviewStatus, &c.ReviewReason, &c.AvatarImageID, &c.CardImageID, &c.Owner, &c.CreatedAt, &c.UpdatedAt,
 		&c.ImageCount, &counts); err != nil {
 		return nil, err
 	}
@@ -464,10 +466,10 @@ func (s *Store) CreateChar(c Char) (*Char, error) {
 	defer cancel()
 	var id int64
 	err := s.pool.QueryRow(ctx, `INSERT INTO hxh_char
-		(name, name_ja, first, rank, nen_types, affiliation, arcs, arms, description, notes, owner)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+		(name, name_ja, first, rank, nen_types, affiliation, arcs, arms, description, card_description, notes, owner)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
 		c.Name, c.NameJA, c.First, c.Rank, joinSlugs(c.NenTypes), c.Affiliation,
-		joinSlugs(c.Arcs), joinSlugs(c.Arms), c.Description, c.Notes, c.Owner).Scan(&id)
+		joinSlugs(c.Arcs), joinSlugs(c.Arms), c.Description, c.CardDesc, c.Notes, c.Owner).Scan(&id)
 	if err != nil {
 		return nil, err
 	}
@@ -502,7 +504,7 @@ func validateCharValues(c *Char) error {
 // editable fields. Unknown keys are an error so typos never pass silently.
 // The review verdict is not a field — see Review.
 var patchKeys = []string{"name", "name_ja", "first", "rank", "nen_types", "affiliation", "arcs", "arms",
-	"description", "notes", "avatar_image_id", "card_image_id"}
+	"description", "card_description", "notes", "avatar_image_id", "card_image_id"}
 
 // applyPatch merges a decoded patch into c, validating as it goes.
 func applyPatch(c *Char, patch map[string]json.RawMessage) error {
@@ -551,7 +553,7 @@ func applyPatch(c *Char, patch map[string]json.RawMessage) error {
 		return nil
 	}
 	for k, dst := range map[string]*string{"name": &c.Name, "name_ja": &c.NameJA, "first": &c.First,
-		"rank": &c.Rank, "affiliation": &c.Affiliation, "description": &c.Description, "notes": &c.Notes} {
+		"rank": &c.Rank, "affiliation": &c.Affiliation, "description": &c.Description, "card_description": &c.CardDesc, "notes": &c.Notes} {
 		if err := str(k, dst); err != nil {
 			return err
 		}
@@ -596,10 +598,10 @@ func (s *Store) UpdateChar(id int64, patch map[string]json.RawMessage) (*Char, e
 		}
 	}
 	_, err = s.pool.Exec(ctx, `UPDATE hxh_char SET name=$2, name_ja=$3, first=$4, rank=$5, nen_types=$6,
-		affiliation=$7, arcs=$8, arms=$9, description=$10, notes=$11, avatar_image_id=$12, card_image_id=$13,
+		affiliation=$7, arcs=$8, arms=$9, description=$10, card_description=$11, notes=$12, avatar_image_id=$13, card_image_id=$14,
 		version = version + 1, updated_at=NOW() WHERE id=$1`,
 		id, c.Name, c.NameJA, c.First, c.Rank, joinSlugs(c.NenTypes), c.Affiliation, joinSlugs(c.Arcs),
-		joinSlugs(c.Arms), c.Description, c.Notes, c.AvatarImageID, c.CardImageID)
+		joinSlugs(c.Arms), c.Description, c.CardDesc, c.Notes, c.AvatarImageID, c.CardImageID)
 	if err != nil {
 		return nil, err
 	}
@@ -834,6 +836,7 @@ func MountRosterDB(r chi.Router, store *Store, auth *shared.Store) {
 	r.Route("/db", func(g chi.Router) {
 		g.Group(func(m chi.Router) {
 			m.Use(requireHxh(auth, false))
+			m.Get("/binder", handleBinder(store))
 			m.Get("/images/{id}", handleImageData(store, false))
 			m.Get("/images/{id}/thumb", handleImageData(store, true))
 		})
@@ -852,6 +855,40 @@ func MountRosterDB(r chi.Router, store *Store, auth *shared.Store) {
 			a.Post("/images/{id}/crop", handleCrop(store))
 		})
 	})
+}
+
+// BinderCard is what a guest's Binder needs to print one card — accepted
+// characters only, no notes, no review.
+type BinderCard struct {
+	ID            int64    `json:"id"`
+	Name          string   `json:"name"`
+	First         string   `json:"first"`
+	Rank          string   `json:"rank"`
+	NenTypes      []string `json:"nen_types"`
+	Affiliation   string   `json:"affiliation"`
+	Arcs          []string `json:"arcs"`
+	Arms          []string `json:"arms"`
+	CardDesc      string   `json:"card_description"`
+	Description   string   `json:"description"`
+	AvatarImageID *int64   `json:"avatar_image_id"`
+	CardImageID   *int64   `json:"card_image_id"`
+	Version       int      `json:"version"`
+}
+
+func handleBinder(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		chars, err := store.ListChars("accepted", "")
+		if err != nil {
+			fail(w, err, "binder")
+			return
+		}
+		out := make([]BinderCard, 0, len(chars))
+		for _, c := range chars {
+			out = append(out, BinderCard{ID: c.ID, Name: c.Name, First: c.First, Rank: c.Rank, NenTypes: c.NenTypes, Affiliation: c.Affiliation,
+				Arcs: c.Arcs, Arms: c.Arms, CardDesc: c.CardDesc, Description: c.Description, AvatarImageID: c.AvatarImageID, CardImageID: c.CardImageID, Version: c.Version})
+		}
+		writeJSON(w, http.StatusOK, out)
+	}
 }
 
 func handleListChars(store *Store) http.HandlerFunc {
