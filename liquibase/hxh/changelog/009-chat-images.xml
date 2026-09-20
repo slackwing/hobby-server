@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        Pictures in Beetle (2026-09-19). One picture per message, at most.
+        The bytes live HERE, in the database (like the Roster DB's), never
+        on disk: nothing under the web root is ever written by a user, the
+        rsync mirror stays a mirror, and every byte served was re-encoded
+        by the server from a decoded image — no polyglots, no metadata, no
+        scripts. A message points at its picture (image_id); a picture is
+        served only to someone who may read that message's room (or to
+        its own uploader, before it is sent).
+    -->
+
+    <changeSet id="009-chat-images" author="hxh">
+        <createTable tableName="hxh_chat_image">
+            <column name="id" type="BIGINT" autoIncrement="true">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="sender" type="VARCHAR(50)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="mime" type="VARCHAR(40)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="width" type="INT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="height" type="INT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="data" type="BYTEA">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <addColumn tableName="hxh_chat_message">
+            <column name="image_id" type="BIGINT"/>
+        </addColumn>
+        <createIndex tableName="hxh_chat_message" indexName="idx_hxh_chat_message_image">
+            <column name="image_id"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

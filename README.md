@@ -64,7 +64,14 @@ Plus `GET /healthz` at the server root (used by Docker healthcheck).
 - `GET  /api/hxh/chat/profile/{username}` / `PUT /api/hxh/chat/profile`
   `{runs:[…]}` — AIM-style profiles in a JSON "runs" format (never
   HTML), ≤ 1024 characters
-- `GET  /api/hxh/chat/ws` — the WebSocket: `msg`, `typing`, `read`,
+- `POST /api/hxh/chat/image` (raw bytes, ≤ 12 MB, png/jpeg/gif/webp) →
+  `{id, width, height}` — decoded, scaled to ≤ 1600 px and re-encoded
+  by the server (JPEG when opaque, else PNG), stored in the database
+  (`hxh_chat_image`, changeset 009), never on disk; `GET
+  /api/hxh/chat/image/{id}` serves it to its uploader or to anyone who
+  may read the room of the message it hangs on (`image_id` on
+  `hxh_chat_message`; one picture per message).
+- `GET  /api/hxh/chat/ws` — the WebSocket: `msg` (+ `image_id`), `typing`, `read`,
   `ping` in; `hello` (contacts + `unread` per room), `msg`, `typing`,
   `presence`, `read` (to the user's other tabs), `pong`, `error` out
   (frame shapes at the top of `internal/hxh/hub.go`). Read markers

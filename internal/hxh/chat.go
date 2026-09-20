@@ -22,7 +22,15 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 
+	"bytes"
 	"github.com/slackwing/hobby-server/internal/shared"
+	_ "golang.org/x/image/webp"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
+	"io"
+	"strconv"
 )
 
 const (
@@ -41,6 +49,62 @@ type Message struct {
 	Sender    string    `json:"sender"`
 	Body      string    `json:"body"`
 	CreatedAt time.Time `json:"created_at"`
+	Image     *ImageRef `json:"image,omitempty"` // at most one picture, shown as a block under the text
+}
+
+// ImageRef points a message at its picture (served by GET /chat/image/{id}).
+type ImageRef struct {
+	ID     int64 `json:"id"`
+	Width  int   `json:"width"`
+	Height int   `json:"height"`
+}
+
+// MaxImageUpload bounds a picture upload; MaxImageSide is the longest edge
+// kept after the server re-encodes it.
+const (
+	MaxImageUpload = 12 << 20
+	MaxImageSide   = 1600
+)
+
+// InsertImage stores a picture's re-encoded bytes for `sender`; it is
+// attached to a message later (or never).
+func (s *Store) InsertChatImage(sender, mime string, width, height int, data []byte) (int64, error) {
+	ctx, cancel := withCtx()
+	defer cancel()
+	var id int64
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO hxh_chat_image (sender, mime, width, height, data) VALUES ($1, $2, $3, $4, $5) RETURNING id
+	`, sender, mime, width, height, data).Scan(&id)
+	return id, err
+}
+
+// ImageOwnedFree: does picture `id` belong to `user` and hang on no message yet?
+func (s *Store) ImageOwnedFree(id int64, user string) (bool, error) {
+	ctx, cancel := withCtx()
+	defer cancel()
+	var n int
+	err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM hxh_chat_image i
+		WHERE i.id = $1 AND i.sender = $2 AND NOT EXISTS (SELECT 1 FROM hxh_chat_message m WHERE m.image_id = i.id)
+	`, id, user).Scan(&n)
+	return n > 0, err
+}
+
+// ImageData returns a picture's bytes with who uploaded it and the room of
+// the message it hangs on ("" while unsent), so the caller can decide who
+// may see it.
+func (s *Store) ChatImageData(id int64) (mime string, data []byte, sender, room string, err error) {
+	ctx, cancel := withCtx()
+	defer cancel()
+	var r *string
+	err = s.pool.QueryRow(ctx, `
+		SELECT i.mime, i.data, i.sender, (SELECT m.room FROM hxh_chat_message m WHERE m.image_id = i.id LIMIT 1)
+		FROM hxh_chat_image i WHERE i.id = $1
+	`, id).Scan(&mime, &data, &sender, &r)
+	if r != nil {
+		room = *r
+	}
+	return
 }
 
 // DMRoom names the private room between two users, whichever order
@@ -97,15 +161,26 @@ func canUseRoom(user, room string) bool {
 
 // ---------- store ----------
 
-func (s *Store) InsertMessage(room, sender, body string) (Message, error) {
+func (s *Store) InsertMessage(room, sender, body string, imageID int64) (Message, error) {
 	ctx, cancel := withCtx()
 	defer cancel()
 	m := Message{Room: room, Sender: sender, Body: body}
+	var img *int64
+	if imageID > 0 {
+		img = &imageID
+	}
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO hxh_chat_message (room, sender, body) VALUES ($1, $2, $3)
-		RETURNING id, created_at
-	`, room, sender, body).Scan(&m.ID, &m.CreatedAt)
-	return m, err
+		INSERT INTO hxh_chat_message (room, sender, body, image_id) VALUES ($1, $2, $3, $4)
+		RETURNING id, created_at, (SELECT width FROM hxh_chat_image WHERE id = $4), (SELECT height FROM hxh_chat_image WHERE id = $4)
+	`, room, sender, body, img)
+	var w, hgt *int
+	if err := err.Scan(&m.ID, &m.CreatedAt, &w, &hgt); err != nil {
+		return m, err
+	}
+	if img != nil && w != nil && hgt != nil {
+		m.Image = &ImageRef{ID: imageID, Width: *w, Height: *hgt}
+	}
+	return m, nil
 }
 
 // RoomUnread is what a member has not read in one room.
@@ -167,9 +242,10 @@ func (s *Store) History(room string, after time.Time, limit int) ([]Message, err
 	ctx, cancel := withCtx()
 	defer cancel()
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, room, sender, body, created_at FROM hxh_chat_message
-		WHERE room = $1 AND deleted_at IS NULL AND created_at > $2
-		ORDER BY id DESC LIMIT $3
+		SELECT m.id, m.room, m.sender, m.body, m.created_at, m.image_id, i.width, i.height
+		FROM hxh_chat_message m LEFT JOIN hxh_chat_image i ON i.id = m.image_id
+		WHERE m.room = $1 AND m.deleted_at IS NULL AND m.created_at > $2
+		ORDER BY m.id DESC LIMIT $3
 	`, room, after, limit)
 	if err != nil {
 		return nil, err
@@ -178,8 +254,13 @@ func (s *Store) History(room string, after time.Time, limit int) ([]Message, err
 	out := []Message{}
 	for rows.Next() {
 		var m Message
-		if err := rows.Scan(&m.ID, &m.Room, &m.Sender, &m.Body, &m.CreatedAt); err != nil {
+		var img *int64
+		var w, hgt *int
+		if err := rows.Scan(&m.ID, &m.Room, &m.Sender, &m.Body, &m.CreatedAt, &img, &w, &hgt); err != nil {
 			return nil, err
+		}
+		if img != nil && w != nil && hgt != nil {
+			m.Image = &ImageRef{ID: *img, Width: *w, Height: *hgt}
 		}
 		out = append(out, m)
 	}
@@ -339,7 +420,77 @@ func (c *Chat) Mount(r chi.Router) {
 		g.Get("/chat/history", c.handleHistory)
 		g.Get("/chat/profile/{username}", c.handleGetProfile)
 		g.Put("/chat/profile", c.handlePutProfile)
+		g.Post("/chat/image", c.handleUploadImage)
+		g.Get("/chat/image/{id}", c.handleImage)
 	})
+}
+
+// handleUploadImage takes a picture's raw bytes (any png/jpeg/gif/webp,
+// ≤ MaxImageUpload), decodes it, scales it to at most MaxImageSide and
+// re-encodes it (JPEG when opaque, else PNG) — what is stored and served is
+// always the server's own encoding, never the upload. Answers {id, width,
+// height}; the client attaches the id to its next message.
+func (c *Chat) handleUploadImage(w http.ResponseWriter, r *http.Request) {
+	user := userOf(r)
+	r.Body = http.MaxBytesReader(w, r.Body, MaxImageUpload)
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	img, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		http.Error(w, "not a png/jpeg/gif/webp picture", http.StatusBadRequest)
+		return
+	}
+	if b := img.Bounds(); b.Dx() < 1 || b.Dy() < 1 {
+		http.Error(w, "empty picture", http.StatusBadRequest)
+		return
+	}
+	enc, mime, err := makeThumb(img, MaxImageSide) // scales down, never up; strips everything but pixels
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(enc))
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	id, err := c.store.InsertChatImage(user, mime, cfg.Width, cfg.Height, enc)
+	if err != nil {
+		log.Printf("[hxh chat] image insert error: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, ImageRef{ID: id, Width: cfg.Width, Height: cfg.Height})
+}
+
+// handleImage serves a picture to its uploader or to anyone who may read
+// the room of the message it hangs on.
+func (c *Chat) handleImage(w http.ResponseWriter, r *http.Request) {
+	user := userOf(r)
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil || id <= 0 {
+		http.NotFound(w, r)
+		return
+	}
+	mime, data, sender, room, err := c.store.ChatImageData(id)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if sender != user && (room == "" || !canUseRoom(user, room)) {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable") // ids are immutable
+	w.Header().Set("Content-Type", mime)
+	w.Header().Set("Content-Disposition", "inline")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
 }
 
 func (c *Chat) handleContacts(w http.ResponseWriter, r *http.Request) {

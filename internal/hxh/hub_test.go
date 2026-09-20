@@ -14,19 +14,47 @@ import (
 // ---- fakes ----
 
 type memStore struct {
-	mu    sync.Mutex
-	msgs  []Message
-	next  int64
-	reads map[string]int64 // user|room → last read id
+	mu     sync.Mutex
+	msgs   []Message
+	next   int64
+	reads  map[string]int64 // user|room → last read id
+	images map[int64]*memImage
 }
 
-func (s *memStore) InsertMessage(room, sender, body string) (Message, error) {
+type memImage struct {
+	sender string
+	used   bool
+}
+
+func (s *memStore) InsertMessage(room, sender, body string, imageID int64) (Message, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.next++
 	m := Message{ID: s.next, Room: room, Sender: sender, Body: body, CreatedAt: time.Now()}
+	if imageID > 0 {
+		m.Image = &ImageRef{ID: imageID, Width: 640, Height: 480}
+		if s.images != nil {
+			s.images[imageID].used = true
+		}
+	}
 	s.msgs = append(s.msgs, m)
 	return m, nil
+}
+
+func (s *memStore) ImageOwnedFree(id int64, user string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	im, ok := s.images[id]
+	return ok && im.sender == user && !im.used, nil
+}
+
+func (s *memStore) addImage(id int64, sender string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.images == nil {
+		s.images = map[int64]*memImage{}
+	}
+	s.images[id] = &memImage{sender: sender}
 }
 
 func (s *memStore) MarkRead(user, room string, id int64) error {
@@ -301,11 +329,11 @@ func unreadOf(hello map[string]any) string {
 func TestHelloCarriesUnreadAndReadsAreSharedAcrossTabs(t *testing.T) {
 	h, store, _, _ := newTestHub()
 	dm := DMRoom("abi", "andrew")
-	store.InsertMessage(RoomGlobal, "abi", "one")
-	store.InsertMessage(RoomGlobal, "abi", "two")
-	m3, _ := store.InsertMessage(dm, "abi", "psst")
-	store.InsertMessage(DMRoom("abi", "newbie"), "abi", "not yours")
-	store.InsertMessage(RoomGlobal, "andrew", "mine") // own messages never count
+	store.InsertMessage(RoomGlobal, "abi", "one", 0)
+	store.InsertMessage(RoomGlobal, "abi", "two", 0)
+	m3, _ := store.InsertMessage(dm, "abi", "psst", 0)
+	store.InsertMessage(DMRoom("abi", "newbie"), "abi", "not yours", 0)
+	store.InsertMessage(RoomGlobal, "andrew", "mine", 0) // own messages never count
 	andrew := h.add("andrew")
 	hello := next(t, andrew)
 	if hello["t"] != "hello" {
@@ -391,6 +419,40 @@ func TestDMNeedsAReachablePartner(t *testing.T) {
 	if m := next(t, andrew); m["t"] != "msg" {
 		t.Fatalf("global needs nobody, got %v", m)
 	}
+}
+
+func TestAPictureRidesOneMessage(t *testing.T) {
+	h, store, _, _ := newTestHub()
+	andrew, abi := h.add("andrew"), h.add("abi")
+	drain(andrew, abi)
+	store.addImage(7, "andrew")
+	store.addImage(8, "abi")
+	// a picture alone is a message; the fan-out carries its size
+	frame(andrew, map[string]any{"t": "msg", "room": RoomGlobal, "body": "", "image_id": 7})
+	m := next(t, andrew)
+	img, _ := m["msg"].(map[string]any)["image"].(map[string]any)
+	if m["t"] != "msg" || img["id"] != float64(7) || img["width"] != float64(640) {
+		t.Fatalf("picture message, got %v", m)
+	}
+	drain(abi)
+	// the same picture cannot be sent twice; someone else's picture, or none, is refused; text is still required without one
+	frame(andrew, map[string]any{"t": "msg", "room": RoomGlobal, "body": "again", "image_id": 7})
+	if e := next(t, andrew); e["code"] != "image" {
+		t.Fatalf("a used picture is refused, got %v", e)
+	}
+	frame(andrew, map[string]any{"t": "msg", "room": RoomGlobal, "body": "hers", "image_id": 8})
+	if e := next(t, andrew); e["code"] != "image" {
+		t.Fatalf("someone else's picture is refused, got %v", e)
+	}
+	frame(andrew, map[string]any{"t": "msg", "room": RoomGlobal, "body": "ghost", "image_id": 99})
+	if e := next(t, andrew); e["code"] != "image" {
+		t.Fatalf("a missing picture is refused, got %v", e)
+	}
+	frame(andrew, map[string]any{"t": "msg", "room": RoomGlobal, "body": "  "})
+	if e := next(t, andrew); e["code"] != "body" {
+		t.Fatalf("no text and no picture is nothing, got %v", e)
+	}
+	none(t, abi)
 }
 
 func TestGlobalMessageFanOut(t *testing.T) {

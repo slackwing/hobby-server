@@ -19,5 +19,6 @@
     <include file="changelog/007-owners.xml"/>
     <include file="changelog/008-card-description.xml"/>
     <include file="changelog/008-chat-read.xml"/>
+    <include file="changelog/009-chat-images.xml"/>
 
 </databaseChangeLog>

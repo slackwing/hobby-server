@@ -4,17 +4,18 @@
 //
 // Wire format (JSON text frames):
 //
-//	client → server  {"t":"msg","room":R,"body":S}  {"t":"typing","room":R}
+//	client → server  {"t":"msg","room":R,"body":S,"image_id":N?}  {"t":"typing","room":R}
 //	                 {"t":"read","room":R,"id":N}  (the focused tab showed R up to message N)
 //	                 {"t":"ping"}
 //	server → client  {"t":"hello","me":U,"contacts":[…],"unread":[{room,count,last_id}…]}
-//	                 {"t":"msg","msg":{id,room,sender,body,created_at}}
+//	                 {"t":"msg","msg":{id,room,sender,body,created_at,image?:{id,width,height}}}
 //	                 {"t":"typing","room":R,"user":U}
 //	                 {"t":"presence","user":U,"state":S,"last_seen_at":T}
 //	                 {"t":"read","room":R,"id":N}  (to the user's OTHER tabs)
 //	                 {"t":"pong"}  {"t":"error","code":C,"room":R}
 //
-// Error codes: room (not yours), body, rate, server, bad, and offline —
+// Error codes: room (not yours), body, rate, server, bad, image (a picture
+// that is not yours, already sent, or missing), and offline —
 // a DM to someone neither online nor away is refused (Andrew,
 // 2026-09-19: "you can message online and away people, but not offline").
 //
@@ -47,7 +48,8 @@ const (
 )
 
 type chatStore interface {
-	InsertMessage(room, sender, body string) (Message, error)
+	InsertMessage(room, sender, body string, imageID int64) (Message, error)
+	ImageOwnedFree(id int64, user string) (bool, error)
 	MarkRead(user, room string, id int64) error
 	Unread(user string, after time.Time) ([]RoomUnread, error)
 }
@@ -410,10 +412,11 @@ func (h *Hub) broadcastRoom(room string, v any, except string) {
 }
 
 type inFrame struct {
-	T    string `json:"t"`
-	Room string `json:"room"`
-	Body string `json:"body"`
-	ID   int64  `json:"id"`
+	T       string `json:"t"`
+	Room    string `json:"room"`
+	Body    string `json:"body"`
+	ID      int64  `json:"id"`
+	ImageID int64  `json:"image_id"` // msg: a picture uploaded by this user, not yet on a message
 }
 
 func (c *hubClient) fail(code, room string) {
@@ -463,15 +466,27 @@ func (h *Hub) handle(c *hubClient, data []byte) {
 			return
 		}
 		body := strings.TrimSpace(f.Body)
-		if body == "" || utf8.RuneCountInString(body) > MaxBody {
+		if (body == "" && f.ImageID <= 0) || utf8.RuneCountInString(body) > MaxBody {
 			c.fail("body", f.Room)
 			return
+		}
+		if f.ImageID > 0 {
+			ok, err := h.store.ImageOwnedFree(f.ImageID, c.user)
+			if err != nil {
+				log.Printf("[hxh chat] image check error: %v", err)
+				c.fail("server", f.Room)
+				return
+			}
+			if !ok { // not yours, already sent, or no such picture
+				c.fail("image", f.Room)
+				return
+			}
 		}
 		if !c.limiter.take(h.now()) {
 			c.fail("rate", f.Room)
 			return
 		}
-		m, err := h.store.InsertMessage(f.Room, c.user, body)
+		m, err := h.store.InsertMessage(f.Room, c.user, body, f.ImageID)
 		if err != nil {
 			log.Printf("[hxh chat] insert error: %v", err)
 			c.fail("server", f.Room)
