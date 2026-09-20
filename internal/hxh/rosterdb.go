@@ -40,6 +40,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"image/color"
 	"image/draw"
 	"image/gif"
 	"image/jpeg"
@@ -248,13 +249,63 @@ func makeThumb(img image.Image, maxSide int) ([]byte, string, error) {
 	return buf.Bytes(), "image/png", nil
 }
 
+// decodeImage is image.Decode plus the one correction the standard
+// decoders need: x/image/webp hands back a lossy WebP as image.YCbCr,
+// and Go's YCbCr→RGB math assumes JPEG's full-range luma, while VP8
+// stores BT.601 limited range (16–235). Left alone, every thumb and crop
+// made from a WebP came out flattened (dark +10, bright −14 — Gon's
+// first card, 2026-09-20), so the studio-swing formula libwebp and the
+// browsers use is applied here. Alpha WebPs (NYCbCrA) get the same.
+func decodeImage(data []byte) (image.Image, string, error) {
+	img, format, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, "", err
+	}
+	if format == "webp" {
+		switch v := img.(type) {
+		case *image.YCbCr:
+			img = studioToFull(v, nil)
+		case *image.NYCbCrA:
+			img = studioToFull(&v.YCbCr, v)
+		}
+	}
+	return img, format, nil
+}
+
+func studioToFull(src *image.YCbCr, alpha *image.NYCbCrA) *image.NRGBA {
+	clamp := func(v float64) uint8 {
+		if v < 0 {
+			return 0
+		}
+		if v > 255 {
+			return 255
+		}
+		return uint8(v + 0.5)
+	}
+	b := src.Bounds()
+	dst := image.NewNRGBA(b)
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			c := src.YCbCrAt(x, y)
+			yy := 1.164 * (float64(c.Y) - 16)
+			cb, cr := float64(c.Cb)-128, float64(c.Cr)-128
+			a := uint8(255)
+			if alpha != nil {
+				a = alpha.A[alpha.AOffset(x, y)]
+			}
+			dst.SetNRGBA(x, y, color.NRGBA{clamp(yy + 1.596*cr), clamp(yy - 0.392*cb - 0.813*cr), clamp(yy + 2.017*cb), a})
+		}
+	}
+	return dst
+}
+
 // decodeUpload validates bytes as a picture and derives everything the
 // row needs. GIFs keep only their first frame.
 func decodeUpload(data []byte) (*decoded, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("%w: empty body", ErrBadInput)
 	}
-	img, format, err := image.Decode(bytes.NewReader(data))
+	img, format, err := decodeImage(data)
 	if err != nil {
 		return nil, fmt.Errorf("%w: not a png/jpeg/gif/webp image", ErrBadInput)
 	}
@@ -759,7 +810,7 @@ func (s *Store) CropImage(id int64, rect CropRect, by string) (*Image, bool, err
 	if err != nil {
 		return nil, false, err
 	}
-	img, _, err := image.Decode(bytes.NewReader(data))
+	img, _, err := decodeImage(data)
 	if err != nil {
 		return nil, false, fmt.Errorf("decode stored image %d: %w", id, err)
 	}

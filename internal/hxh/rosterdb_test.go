@@ -2,6 +2,7 @@ package hxh
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"image"
 	"image/color"
@@ -168,5 +169,32 @@ func TestApplyPatch(t *testing.T) {
 	c = base()
 	if err := applyPatch(c, patch(`{"nen_types":null}`)); err != nil || c.NenTypes == nil || len(c.NenTypes) != 0 {
 		t.Fatalf("null list: err=%v types=%#v", err, c.NenTypes)
+	}
+}
+
+// A 64×64 lossy WebP: left half black, right half white (Pillow, q90).
+const bwWebP = "UklGRj4AAABXRUJQVlA4IDIAAACQAwCdASpAAEAAPjEWiUMiISEVBAAgAwS0gAAmimEoVOTMSCFAAP7+fLK/y6gAAAAAAA=="
+
+// Lossy WebP is limited-range YCbCr; Go's default conversion would
+// read the black half as (16,16,16) and the white as (235,235,235).
+func TestDecodeUploadReadsWebPAtFullRange(t *testing.T) {
+	data, err := base64.StdEncoding.DecodeString(bwWebP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := decodeUpload(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.mime != "image/webp" || d.width != 64 || d.height != 64 {
+		t.Fatalf("got %+v", d)
+	}
+	r, g, b, _ := d.img.At(8, 32).RGBA()
+	if r>>8 > 2 || g>>8 > 2 || b>>8 > 2 {
+		t.Fatalf("black half decoded as (%d,%d,%d), want ~0", r>>8, g>>8, b>>8)
+	}
+	r, g, b, _ = d.img.At(56, 32).RGBA()
+	if r>>8 < 253 || g>>8 < 253 || b>>8 < 253 {
+		t.Fatalf("white half decoded as (%d,%d,%d), want ~255", r>>8, g>>8, b>>8)
 	}
 }
