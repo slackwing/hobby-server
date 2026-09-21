@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        card_number (Andrew, 2026-09-21): the character's position in the
+        binder, separate from the id (the id is the handle and never
+        changes). Deliberately NOT unique — renumbering and swapping are
+        easier when a duplicate is tolerated and fixed later. Starts
+        equal to the id; new characters take the next number after the
+        highest; reviewers renumber by dragging rows in the Roster DB.
+    -->
+
+    <changeSet id="011-card-number" author="hxh">
+        <addColumn tableName="hxh_char">
+            <column name="card_number" type="INT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+        <sql>UPDATE hxh_char SET card_number = id</sql>
+        <createIndex tableName="hxh_char" indexName="idx_hxh_char_card_number">
+            <column name="card_number"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

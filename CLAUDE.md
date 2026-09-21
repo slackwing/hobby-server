@@ -119,6 +119,17 @@ state, etc.) as needed.
   character withdraws its open requests. The feathers CLI
   (`hxh-roster/roster.py requests | resolve | kinds | request`) and
   the skill's § 8b are how the bot works the queue.
+  Card numbers (changeset 011, 2026-09-21): `card_number` is the
+  binder position, separate from the id (the handle, never renumbered)
+  and NOT unique on purpose (Andrew: a duplicate is easy to fix, a
+  constraint would make swapping hard). Starts as the id; a new
+  character takes max+1; patchable. `POST /chars/{id}/move {after}`
+  puts a character right after another (0 = the front) in one
+  transaction — `moveOrder` in rosterdb.go re-hands the numbers held
+  between the old and new position, so gaps and duplicates survive and
+  nothing outside that stretch changes — and answers with the whole
+  list (the Roster DB app's drag-and-drop calls it; versions do not
+  bump). `/chars` and `/db/binder` order by card_number then id.
   The 2026-09-17 `hxh_characters` roster tables stay as a cross-check
   source.
 - `internal/hxh/chat.go` + `hub.go` — the chat endpoints, profile-run

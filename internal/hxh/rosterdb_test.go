@@ -220,3 +220,46 @@ func TestReviewRefusesRequestedAsVerdict(t *testing.T) {
 		t.Fatal("requested must still be a valid character status")
 	}
 }
+
+func TestMoveOrder(t *testing.T) {
+	seq := func(ns ...int) []numbered {
+		out := []numbered{}
+		for i, n := range ns {
+			out = append(out, numbered{ID: int64(i + 1), N: n})
+		}
+		return out
+	}
+	check := func(name string, got map[int64]int, err error, want map[int64]int) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if len(got) != len(want) {
+			t.Fatalf("%s: got %v, want %v", name, got, want)
+		}
+		for k, v := range want {
+			if got[k] != v {
+				t.Fatalf("%s: got %v, want %v", name, got, want)
+			}
+		}
+	}
+	got, err := moveOrder(seq(1, 2, 3, 4, 5), 5, 2)
+	check("up: 5 after 2", got, err, map[int64]int{5: 3, 3: 4, 4: 5})
+	got, err = moveOrder(seq(1, 2, 3, 4, 5), 4, 0)
+	check("to the front", got, err, map[int64]int{4: 1, 1: 2, 2: 3, 3: 4})
+	got, err = moveOrder(seq(1, 2, 3, 4, 5), 1, 3)
+	check("down: 1 after 3", got, err, map[int64]int{2: 1, 3: 2, 1: 3})
+	got, err = moveOrder(seq(1, 2, 3, 4, 5), 3, 2)
+	check("already there", got, err, map[int64]int{})
+	got, err = moveOrder(seq(1, 2, 3, 4, 5), 3, 3)
+	check("after itself", got, err, map[int64]int{})
+	// gaps and duplicates are kept: numbers 1,4,4,9 — 4 (No. 9) after 1 hands 4,4,9 out again
+	got, err = moveOrder(seq(1, 4, 4, 9), 4, 1)
+	check("gaps and duplicates", got, err, map[int64]int{4: 4, 3: 9})
+	if _, err := moveOrder(seq(1, 2), 9, 0); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown character: %v", err)
+	}
+	if _, err := moveOrder(seq(1, 2), 1, 9); !errors.Is(err, ErrBadInput) {
+		t.Fatalf("unknown anchor: %v", err)
+	}
+}

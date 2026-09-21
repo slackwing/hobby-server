@@ -86,6 +86,7 @@ var (
 
 type Char struct {
 	ID            int64          `json:"id"`
+	CardNumber    int            `json:"card_number"` // the binder position; not unique on purpose (Andrew, 2026-09-21)
 	Name          string         `json:"name"`
 	NameJA        string         `json:"name_ja"`
 	First         string         `json:"first"`
@@ -374,7 +375,7 @@ func isUnique(err error) bool {
 	return errors.As(err, &pg) && pg.Code == "23505"
 }
 
-const charCols = `c.id, c.name, c.name_ja, c.first, c.rank, c.nen_types, c.affiliation, c.arcs, c.arms,
+const charCols = `c.id, c.card_number, c.name, c.name_ja, c.first, c.rank, c.nen_types, c.affiliation, c.arcs, c.arms,
 	c.description, c.card_description, c.notes, c.version, c.review_status, c.review_reason, c.avatar_image_id, c.card_image_id, c.owner, c.created_at, c.updated_at,
 	(SELECT count(*) FROM hxh_char_image i WHERE i.char_id = c.id),
 	COALESCE((SELECT json_object_agg(t.type, t.n) FROM (SELECT type, count(*) AS n FROM hxh_char_image i WHERE i.char_id = c.id GROUP BY type) t), '{}'::json)`
@@ -383,7 +384,7 @@ func scanChar(row pgx.Row) (*Char, error) {
 	var c Char
 	var nen, arcs, arms string
 	var counts []byte
-	if err := row.Scan(&c.ID, &c.Name, &c.NameJA, &c.First, &c.Rank, &nen, &c.Affiliation, &arcs, &arms,
+	if err := row.Scan(&c.ID, &c.CardNumber, &c.Name, &c.NameJA, &c.First, &c.Rank, &nen, &c.Affiliation, &arcs, &arms,
 		&c.Description, &c.CardDesc, &c.Notes, &c.Version, &c.ReviewStatus, &c.ReviewReason, &c.AvatarImageID, &c.CardImageID, &c.Owner, &c.CreatedAt, &c.UpdatedAt,
 		&c.ImageCount, &counts); err != nil {
 		return nil, err
@@ -402,7 +403,7 @@ func (s *Store) ListChars(status, name string) ([]Char, error) {
 	ctx, cancel := withCtx()
 	defer cancel()
 	rows, err := s.pool.Query(ctx, `SELECT `+charCols+` FROM hxh_char c
-		WHERE ($1 = '' OR c.review_status = $1) AND ($2 = '' OR lower(c.name) = lower($2)) ORDER BY c.id`, status, strings.TrimSpace(name))
+		WHERE ($1 = '' OR c.review_status = $1) AND ($2 = '' OR lower(c.name) = lower($2)) ORDER BY c.card_number, c.id`, status, strings.TrimSpace(name))
 	if err != nil {
 		return nil, err
 	}
@@ -715,8 +716,8 @@ func (s *Store) CreateChar(c Char) (*Char, error) {
 	defer cancel()
 	var id int64
 	err := s.pool.QueryRow(ctx, `INSERT INTO hxh_char
-		(name, name_ja, first, rank, nen_types, affiliation, arcs, arms, description, card_description, notes, owner)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+		(name, name_ja, first, rank, nen_types, affiliation, arcs, arms, description, card_description, notes, owner, card_number)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, (SELECT COALESCE(MAX(card_number), 0) + 1 FROM hxh_char)) RETURNING id`,
 		c.Name, c.NameJA, c.First, c.Rank, joinSlugs(c.NenTypes), c.Affiliation,
 		joinSlugs(c.Arcs), joinSlugs(c.Arms), c.Description, c.CardDesc, c.Notes, c.Owner).Scan(&id)
 	if err != nil {
@@ -753,7 +754,7 @@ func validateCharValues(c *Char) error {
 // editable fields. Unknown keys are an error so typos never pass silently.
 // The review verdict is not a field — see Review.
 var patchKeys = []string{"name", "name_ja", "first", "rank", "nen_types", "affiliation", "arcs", "arms",
-	"description", "card_description", "notes", "avatar_image_id", "card_image_id"}
+	"description", "card_description", "notes", "avatar_image_id", "card_image_id", "card_number"}
 
 // applyPatch merges a decoded patch into c, validating as it goes.
 func applyPatch(c *Char, patch map[string]json.RawMessage) error {
@@ -817,6 +818,13 @@ func applyPatch(c *Char, patch map[string]json.RawMessage) error {
 			return err
 		}
 	}
+	if raw, ok := patch["card_number"]; ok {
+		var v int
+		if err := json.Unmarshal(raw, &v); err != nil || v < 0 {
+			return fmt.Errorf("%w: card_number must be a whole number", ErrBadInput)
+		}
+		c.CardNumber = v
+	}
 	c.Name = strings.TrimSpace(c.Name)
 	if c.Name == "" {
 		return fmt.Errorf("%w: name required", ErrBadInput)
@@ -847,10 +855,10 @@ func (s *Store) UpdateChar(id int64, patch map[string]json.RawMessage) (*Char, e
 		}
 	}
 	_, err = s.pool.Exec(ctx, `UPDATE hxh_char SET name=$2, name_ja=$3, first=$4, rank=$5, nen_types=$6,
-		affiliation=$7, arcs=$8, arms=$9, description=$10, card_description=$11, notes=$12, avatar_image_id=$13, card_image_id=$14,
+		affiliation=$7, arcs=$8, arms=$9, description=$10, card_description=$11, notes=$12, avatar_image_id=$13, card_image_id=$14, card_number=$15,
 		version = version + 1, updated_at=NOW() WHERE id=$1`,
 		id, c.Name, c.NameJA, c.First, c.Rank, joinSlugs(c.NenTypes), c.Affiliation, joinSlugs(c.Arcs),
-		joinSlugs(c.Arms), c.Description, c.CardDesc, c.Notes, c.AvatarImageID, c.CardImageID)
+		joinSlugs(c.Arms), c.Description, c.CardDesc, c.Notes, c.AvatarImageID, c.CardImageID, c.CardNumber)
 	if err != nil {
 		return nil, err
 	}
@@ -1097,6 +1105,7 @@ func MountRosterDB(r chi.Router, store *Store, auth *shared.Store) {
 			a.Patch("/chars/{id}", handlePatchChar(store))
 			a.Post("/chars/{id}/review", handleReview(store))
 			a.Post("/chars/{id}/request", handleRequest(store))
+			a.Post("/chars/{id}/move", handleMove(store))
 			a.Get("/request-kinds", handleRequestKinds(store))
 			a.Get("/requests", handleListRequests(store))
 			a.Post("/requests/{id}/resolve", handleResolveRequest(store))
@@ -1114,6 +1123,7 @@ func MountRosterDB(r chi.Router, store *Store, auth *shared.Store) {
 // characters only, no notes, no review.
 type BinderCard struct {
 	ID            int64    `json:"id"`
+	CardNumber    int      `json:"card_number"`
 	Name          string   `json:"name"`
 	First         string   `json:"first"`
 	Rank          string   `json:"rank"`
@@ -1140,10 +1150,141 @@ func handleBinder(store *Store) http.HandlerFunc {
 			if c.AvatarImageID == nil || c.CardImageID == nil { // a card needs both pictures (Andrew, 2026-09-21)
 				continue
 			}
-			out = append(out, BinderCard{ID: c.ID, Name: c.Name, First: c.First, Rank: c.Rank, NenTypes: c.NenTypes, Affiliation: c.Affiliation,
+			out = append(out, BinderCard{ID: c.ID, CardNumber: c.CardNumber, Name: c.Name, First: c.First, Rank: c.Rank, NenTypes: c.NenTypes, Affiliation: c.Affiliation,
 				Arcs: c.Arcs, Arms: c.Arms, CardDesc: c.CardDesc, Description: c.Description, AvatarImageID: c.AvatarImageID, CardImageID: c.CardImageID, Version: c.Version})
 		}
 		writeJSON(w, http.StatusOK, out)
+	}
+}
+
+/* ---------- card numbers: the binder order ---------- */
+
+// numbered is a character's place in the binder order.
+type numbered struct {
+	ID int64
+	N  int
+}
+
+// moveOrder places id right after after (0 = the front) in seq — every
+// character ordered by (card_number, id) — and returns the new number
+// of each character whose number changes. The numbers held between the
+// old and the new position are handed out again in order, so the
+// multiset of numbers is untouched (a duplicate stays a duplicate) and
+// nothing outside that stretch moves. Andrew (2026-09-21): numbers are
+// not unique on purpose; a renumbering is one atomic operation.
+func moveOrder(seq []numbered, id, after int64) (map[int64]int, error) {
+	p := -1
+	for i, x := range seq {
+		if x.ID == id {
+			p = i
+		}
+	}
+	if p < 0 {
+		return nil, ErrNotFound
+	}
+	if after == id {
+		return nil, nil
+	}
+	rest := make([]numbered, 0, len(seq))
+	rest = append(rest, seq[:p]...)
+	rest = append(rest, seq[p+1:]...)
+	q := 0
+	if after != 0 {
+		q = -1
+		for i, x := range rest {
+			if x.ID == after {
+				q = i + 1
+			}
+		}
+		if q < 0 {
+			return nil, fmt.Errorf("%w: no character %d to put it after", ErrBadInput, after)
+		}
+	}
+	if q == p {
+		return nil, nil
+	}
+	next := make([]numbered, 0, len(seq))
+	next = append(next, rest[:q]...)
+	next = append(next, seq[p])
+	next = append(next, rest[q:]...)
+	lo, hi := p, q
+	if lo > hi {
+		lo, hi = hi, lo
+	}
+	changes := map[int64]int{}
+	for i := lo; i <= hi; i++ {
+		if next[i].N != seq[i].N {
+			changes[next[i].ID] = seq[i].N
+		}
+	}
+	return changes, nil
+}
+
+// Move renumbers so that id sits right after after (0 = the front), in
+// one transaction over the whole order, and answers with the whole
+// list. Versions do not bump: a card's number is where it sits, not
+// what it says.
+func (s *Store) Move(id, after int64) ([]Char, error) {
+	ctx, cancel := withCtx()
+	defer cancel()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	rows, err := tx.Query(ctx, `SELECT id, card_number FROM hxh_char ORDER BY card_number, id FOR UPDATE`)
+	if err != nil {
+		return nil, err
+	}
+	var seq []numbered
+	for rows.Next() {
+		var x numbered
+		if err := rows.Scan(&x.ID, &x.N); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		seq = append(seq, x)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	changes, err := moveOrder(seq, id, after)
+	if err != nil {
+		return nil, err
+	}
+	for cid, n := range changes {
+		if _, err := tx.Exec(ctx, `UPDATE hxh_char SET card_number = $2 WHERE id = $1`, cid, n); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return s.ListChars("", "")
+}
+
+// handleMove: {after: id} — put this character right after that one (0 = the front).
+func handleMove(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, ok := idParam(r, "id")
+		if !ok {
+			fail(w, ErrNotFound, "")
+			return
+		}
+		var body struct {
+			After int64 `json:"after"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&body); err != nil {
+			fail(w, fmt.Errorf("%w: bad json", ErrBadInput), "move")
+			return
+		}
+		list, err := store.Move(id, body.After)
+		if err != nil {
+			fail(w, err, "move")
+			return
+		}
+		writeJSON(w, http.StatusOK, list)
 	}
 }
 
