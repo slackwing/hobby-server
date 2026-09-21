@@ -569,7 +569,7 @@ func (s *Store) changed(ctx context.Context, charID int64, by string, bot bool, 
 			return err
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO hxh_char_review (char_id, version, status, reason, owner) VALUES ($1, $2, 'pending', $3, $4)`,
-			charID, version, by+" "+summarize(rows), by); err != nil {
+			charID, version, summarize(rows), by); err != nil {
 			return err
 		}
 	}
