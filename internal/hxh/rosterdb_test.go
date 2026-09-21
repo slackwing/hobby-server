@@ -200,15 +200,6 @@ func TestDecodeUploadReadsWebPAtFullRange(t *testing.T) {
 	}
 }
 
-func TestRequestLogReason(t *testing.T) {
-	if got := requestLogReason("Extend picture", ""); got != "Extend picture" {
-		t.Fatalf("got %q", got)
-	}
-	if got := requestLogReason("Extend picture", "hair cut off"); got != "Extend picture: hair cut off" {
-		t.Fatalf("got %q", got)
-	}
-}
-
 // "requested" is a state only a request can put a character in; a
 // reviewer's verdict is one of the three.
 func TestReviewRefusesRequestedAsVerdict(t *testing.T) {
@@ -261,5 +252,43 @@ func TestMoveOrder(t *testing.T) {
 	}
 	if _, err := moveOrder(seq(1, 2), 1, 9); !errors.Is(err, ErrBadInput) {
 		t.Fatalf("unknown anchor: %v", err)
+	}
+}
+
+func TestDiffCharListsOnlyWhatChanged(t *testing.T) {
+	seven := int64(7)
+	before := &Char{Name: "Gon", NenTypes: []string{"enhancement"}, Arcs: []string{"hunter-exam"}, Arms: []string{}, CardNumber: 1}
+	after := *before
+	after.Name = "Gon Freecss"
+	after.NenTypes = []string{"enhancement", "emission"}
+	after.AvatarImageID = &seven
+	after.CardNumber = 3
+	rows := diffChar(before, &after)
+	got := map[string][2]string{}
+	for _, r := range rows {
+		if r.Kind != "field" || r.Action != "set" {
+			t.Fatalf("bad row %+v", r)
+		}
+		got[r.Field] = [2]string{r.Old, r.New}
+	}
+	want := map[string][2]string{"name": {"Gon", "Gon Freecss"}, "nen_types": {"enhancement", "enhancement, emission"}, "avatar_image_id": {"", "7"}, "card_number": {"1", "3"}}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Fatalf("%s: got %v, want %v", k, got[k], v)
+		}
+	}
+	if n := len(diffChar(before, before)); n != 0 {
+		t.Fatalf("no change should diff to nothing, got %d rows", n)
+	}
+}
+
+func TestSummarize(t *testing.T) {
+	id := int64(1)
+	rows := []Change{{Kind: "field", Field: "description"}, {Kind: "field", Field: "notes"}, {Kind: "image", Action: "added", ImageID: &id}, {Kind: "image", Action: "added", ImageID: &id}, {Kind: "image", Action: "removed", ImageID: &id}}
+	if got := summarize(rows); got != "changed description, notes; added 2 pictures; removed a picture" {
+		t.Fatalf("got %q", got)
 	}
 }

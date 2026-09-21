@@ -22,5 +22,6 @@
     <include file="changelog/009-chat-images.xml"/>
     <include file="changelog/010-requests.xml"/>
     <include file="changelog/011-card-number.xml"/>
+    <include file="changelog/012-change-log.xml"/>
 
 </databaseChangeLog>

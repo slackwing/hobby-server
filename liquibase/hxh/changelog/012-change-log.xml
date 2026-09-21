@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        The change log (Andrew, 2026-09-21): what each version changed —
+        a field (with old and new value), or a picture added, removed
+        or edited — by whom, and whether that was the bot. "New" in the
+        Roster DB is a bot's change above the version the reviewer last
+        judged; a human's change is self-approved and never marked.
+        image_id carries no foreign key on purpose: a removed picture's
+        row must survive the picture.
+    -->
+
+    <changeSet id="012-change-log" author="hxh">
+        <createTable tableName="hxh_char_change">
+            <column name="id" type="BIGINT" autoIncrement="true">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="char_id" type="BIGINT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="version" type="INT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="kind" type="VARCHAR(10)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="field" type="VARCHAR(40)" defaultValue="">
+                <constraints nullable="false"/>
+            </column>
+            <column name="image_id" type="BIGINT"/>
+            <column name="action" type="VARCHAR(10)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="old" type="TEXT" defaultValue="">
+                <constraints nullable="false"/>
+            </column>
+            <column name="new" type="TEXT" defaultValue="">
+                <constraints nullable="false"/>
+            </column>
+            <column name="owner" type="VARCHAR(50)" defaultValue="">
+                <constraints nullable="false"/>
+            </column>
+            <column name="bot" type="BOOLEAN" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <addForeignKeyConstraint
+            constraintName="fk_hxh_char_change_char"
+            baseTableName="hxh_char_change" baseColumnNames="char_id"
+            referencedTableName="hxh_char" referencedColumnNames="id"
+            onDelete="CASCADE"/>
+        <createIndex tableName="hxh_char_change" indexName="idx_hxh_char_change_char">
+            <column name="char_id"/>
+            <column name="version"/>
+        </createIndex>
+    </changeSet>
+
+    <!--
+        The review log holds verdicts only. Requests used to mirror
+        themselves into it ("requested" rows, "request #n done" rows);
+        they have their own table and their own window now.
+    -->
+    <changeSet id="012-review-log-verdicts-only" author="hxh">
+        <sql>DELETE FROM hxh_char_review WHERE status = 'requested' OR (status = 'pending' AND reason LIKE 'request #% done')</sql>
+    </changeSet>
+
+</databaseChangeLog>

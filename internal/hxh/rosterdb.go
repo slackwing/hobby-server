@@ -111,6 +111,36 @@ type Char struct {
 	Images        []Image        `json:"images,omitempty"`
 	Reviews       []Review       `json:"reviews,omitempty"`
 	Requests      []Request      `json:"requests,omitempty"`
+	Baseline      *Baseline      `json:"baseline"` // the last human verdict, or null
+	Changes       []Change       `json:"changes"`  // what changed above the baseline (always present)
+}
+
+// Baseline is the last human verdict: the version the reviewer judged.
+type Baseline struct {
+	Version   int       `json:"version"`
+	Status    string    `json:"status"`
+	Owner     string    `json:"owner"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// Change is one line of the change log: what a version changed — a
+// field (old and new value) or a picture added, removed or edited —
+// by whom, and whether that was the bot. The Roster DB marks a bot's
+// changes above the baseline "New"; a human's are self-approved
+// (Andrew, 2026-09-21).
+type Change struct {
+	ID        int64     `json:"id"`
+	CharID    int64     `json:"char_id"`
+	Version   int       `json:"version"`
+	Kind      string    `json:"kind"` // field | image
+	Field     string    `json:"field,omitempty"`
+	ImageID   *int64    `json:"image_id,omitempty"`
+	Action    string    `json:"action"` // set | added | removed | edited
+	Old       string    `json:"old,omitempty"`
+	New       string    `json:"new,omitempty"`
+	Owner     string    `json:"owner"`
+	Bot       bool      `json:"bot"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // Review is one verdict from the log.
@@ -476,13 +506,133 @@ func (s *Store) GetChar(id int64) (*Char, error) {
 		}
 		c.Requests = append(c.Requests, q)
 	}
-	return c, rq.Err()
+	if err := rq.Err(); err != nil {
+		return nil, err
+	}
+	var b Baseline
+	err = s.pool.QueryRow(ctx, `SELECT version, status, owner, created_at FROM hxh_char_review
+		WHERE char_id = $1 AND status IN ('accepted', 'rejected') ORDER BY created_at DESC, id DESC LIMIT 1`, id).Scan(&b.Version, &b.Status, &b.Owner, &b.CreatedAt)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return nil, err
+	}
+	c.Changes = []Change{}
+	if err == nil {
+		c.Baseline = &b
+		ch, err := s.pool.Query(ctx, `SELECT id, char_id, version, kind, field, image_id, action, old, new, owner, bot, created_at
+			FROM hxh_char_change WHERE char_id = $1 AND version > $2 ORDER BY version, id`, id, b.Version)
+		if err != nil {
+			return nil, err
+		}
+		defer ch.Close()
+		for ch.Next() {
+			var x Change
+			if err := ch.Scan(&x.ID, &x.CharID, &x.Version, &x.Kind, &x.Field, &x.ImageID, &x.Action, &x.Old, &x.New, &x.Owner, &x.Bot, &x.CreatedAt); err != nil {
+				return nil, err
+			}
+			c.Changes = append(c.Changes, x)
+		}
+		if err := ch.Err(); err != nil {
+			return nil, err
+		}
+	}
+	return c, nil
 }
 
-// bump counts a change to the character or its pictures.
-func (s *Store) bump(ctx context.Context, charID int64) error {
-	_, err := s.pool.Exec(ctx, `UPDATE hxh_char SET version = version + 1, updated_at = NOW() WHERE id = $1`, charID)
-	return err
+// changed records what a write did: one version bump, the rows logged
+// under it, and — when the BOT touched an accepted or rejected
+// character — the character back to pending with a review-log line
+// saying why, since the verdict was on a version that no longer
+// exists. A human's change bumps the version but is self-approved and
+// leaves the verdict alone (Andrew, 2026-09-21). No rows, no bump.
+func (s *Store) changed(ctx context.Context, charID int64, by string, bot bool, rows []Change) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var version int
+	var status string
+	if err := tx.QueryRow(ctx, `UPDATE hxh_char SET version = version + 1, updated_at = NOW() WHERE id = $1 RETURNING version, review_status`, charID).Scan(&version, &status); err != nil {
+		return err
+	}
+	for _, r := range rows {
+		if _, err := tx.Exec(ctx, `INSERT INTO hxh_char_change (char_id, version, kind, field, image_id, action, old, new, owner, bot)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, charID, version, r.Kind, r.Field, r.ImageID, r.Action, r.Old, r.New, by, bot); err != nil {
+			return err
+		}
+	}
+	if bot && (status == "accepted" || status == "rejected") {
+		if _, err := tx.Exec(ctx, `UPDATE hxh_char SET review_status = 'pending', review_reason = '' WHERE id = $1`, charID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO hxh_char_review (char_id, version, status, reason, owner) VALUES ($1, $2, 'pending', $3, $4)`,
+			charID, version, by+" "+summarize(rows), by); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+// summarize is the review log's line for a bot change: "changed
+// description, notes", "added 3 pictures", "removed a picture".
+func summarize(rows []Change) string {
+	var fields []string
+	counts := map[string]int{}
+	for _, r := range rows {
+		if r.Kind == "field" {
+			fields = append(fields, r.Field)
+		} else {
+			counts[r.Action]++
+		}
+	}
+	var parts []string
+	if len(fields) > 0 {
+		parts = append(parts, "changed "+strings.Join(fields, ", "))
+	}
+	for _, act := range []string{"added", "removed", "edited"} {
+		switch n := counts[act]; {
+		case n == 1:
+			parts = append(parts, act+" a picture")
+		case n > 1:
+			parts = append(parts, fmt.Sprintf("%s %d pictures", act, n))
+		}
+	}
+	return strings.Join(parts, "; ")
+}
+
+// diffChar lists the fields whose stored value would change, with old
+// and new as the strings the API shows (lists joined by ", ").
+func diffChar(before, after *Char) []Change {
+	var out []Change
+	set := func(field, o, n string) {
+		if o != n {
+			out = append(out, Change{Kind: "field", Field: field, Action: "set", Old: o, New: n})
+		}
+	}
+	ref := func(p *int64) string {
+		if p == nil {
+			return ""
+		}
+		return strconv.FormatInt(*p, 10)
+	}
+	set("name", before.Name, after.Name)
+	set("name_ja", before.NameJA, after.NameJA)
+	set("first", before.First, after.First)
+	set("rank", before.Rank, after.Rank)
+	set("nen_types", strings.Join(before.NenTypes, ", "), strings.Join(after.NenTypes, ", "))
+	set("affiliation", before.Affiliation, after.Affiliation)
+	set("arcs", strings.Join(before.Arcs, ", "), strings.Join(after.Arcs, ", "))
+	set("arms", strings.Join(before.Arms, ", "), strings.Join(after.Arms, ", "))
+	set("description", before.Description, after.Description)
+	set("card_description", before.CardDesc, after.CardDesc)
+	set("notes", before.Notes, after.Notes)
+	set("avatar_image_id", ref(before.AvatarImageID), ref(after.AvatarImageID))
+	set("card_image_id", ref(before.CardImageID), ref(after.CardImageID))
+	set("card_number", strconv.Itoa(before.CardNumber), strconv.Itoa(after.CardNumber))
+	return out
 }
 
 // Review records a verdict on the character's current version. A
@@ -581,14 +731,6 @@ func (s *Store) RequestKinds() ([]RequestKind, error) {
 	return out, rows.Err()
 }
 
-// requestLogReason is what the review log shows for a request.
-func requestLogReason(label, text string) string {
-	if text == "" {
-		return label
-	}
-	return label + ": " + text
-}
-
 // Request files an ask against the character's current version and
 // marks the character "requested" until the bot resolves it.
 func (s *Store) Request(charID int64, kind, text, owner string) (*Char, error) {
@@ -620,10 +762,7 @@ func (s *Store) Request(charID int64, kind, text, owner string) (*Char, error) {
 		charID, kind, text, version, owner); err != nil {
 		return nil, err
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO hxh_char_review (char_id, version, status, reason, owner) VALUES ($1, $2, 'requested', $3, $4)`,
-		charID, version, requestLogReason(label, text), owner); err != nil {
-		return nil, err
-	}
+	_ = label
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
@@ -679,14 +818,7 @@ func (s *Store) ResolveRequest(id int64, by string) (*Request, error) {
 		return nil, err
 	}
 	if open == 0 {
-		var version int
-		err := tx.QueryRow(ctx, `UPDATE hxh_char SET review_status = 'pending' WHERE id = $1 AND review_status = 'requested' RETURNING version`, charID).Scan(&version)
-		if err == nil {
-			if _, err := tx.Exec(ctx, `INSERT INTO hxh_char_review (char_id, version, status, reason, owner) VALUES ($1, $2, 'pending', $3, $4)`,
-				charID, version, fmt.Sprintf("request #%d done", id), by); err != nil {
-				return nil, err
-			}
-		} else if !errors.Is(err, pgx.ErrNoRows) {
+		if _, err := tx.Exec(ctx, `UPDATE hxh_char SET review_status = 'pending' WHERE id = $1 AND review_status = 'requested'`, charID); err != nil {
 			return nil, err
 		}
 	}
@@ -832,13 +964,19 @@ func applyPatch(c *Char, patch map[string]json.RawMessage) error {
 	return validateCharValues(c)
 }
 
-func (s *Store) UpdateChar(id int64, patch map[string]json.RawMessage) (*Char, error) {
-	c, err := s.GetChar(id)
+func (s *Store) UpdateChar(id int64, patch map[string]json.RawMessage, by string, bot bool) (*Char, error) {
+	before, err := s.GetChar(id)
 	if err != nil {
 		return nil, err
 	}
+	next := *before
+	c := &next
 	if err := applyPatch(c, patch); err != nil {
 		return nil, err
+	}
+	rows := diffChar(before, c)
+	if len(rows) == 0 {
+		return before, nil
 	}
 	ctx, cancel := withCtx()
 	defer cancel()
@@ -856,10 +994,13 @@ func (s *Store) UpdateChar(id int64, patch map[string]json.RawMessage) (*Char, e
 	}
 	_, err = s.pool.Exec(ctx, `UPDATE hxh_char SET name=$2, name_ja=$3, first=$4, rank=$5, nen_types=$6,
 		affiliation=$7, arcs=$8, arms=$9, description=$10, card_description=$11, notes=$12, avatar_image_id=$13, card_image_id=$14, card_number=$15,
-		version = version + 1, updated_at=NOW() WHERE id=$1`,
+		updated_at=NOW() WHERE id=$1`,
 		id, c.Name, c.NameJA, c.First, c.Rank, joinSlugs(c.NenTypes), c.Affiliation, joinSlugs(c.Arcs),
 		joinSlugs(c.Arms), c.Description, c.CardDesc, c.Notes, c.AvatarImageID, c.CardImageID, c.CardNumber)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.changed(ctx, id, by, bot, rows); err != nil {
 		return nil, err
 	}
 	return s.GetChar(id)
@@ -919,7 +1060,7 @@ func (s *Store) ImageData(id int64, thumb bool) (mimeType string, data []byte, e
 // AddImage stores a picture for a character. When the same bytes already
 // exist for that character the existing row comes back with created=false
 // (its status tells the caller whether it was rejected before).
-func (s *Store) AddImage(charID int64, typ string, sourceID *int64, sourceURL, caption, by string, data []byte) (im *Image, created bool, err error) {
+func (s *Store) AddImage(charID int64, typ string, sourceID *int64, sourceURL, caption, by string, bot bool, data []byte) (im *Image, created bool, err error) {
 	if !in(ImageTypes, typ) {
 		return nil, false, fmt.Errorf("%w: type must be one of %s", ErrBadInput, strings.Join(ImageTypes, ", "))
 	}
@@ -961,14 +1102,14 @@ func (s *Store) AddImage(charID int64, typ string, sourceID *int64, sourceURL, c
 		}
 		return nil, false, err
 	}
-	if err := s.bump(ctx, charID); err != nil {
+	if err := s.changed(ctx, charID, by, bot, []Change{{Kind: "image", Action: "added", ImageID: &id}}); err != nil {
 		return nil, false, err
 	}
 	im, err = s.GetImage(id)
 	return im, true, err
 }
 
-func (s *Store) UpdateImage(id int64, status, caption *string) (*Image, error) {
+func (s *Store) UpdateImage(id int64, status, caption *string, by string, bot bool) (*Image, error) {
 	if status != nil && !in(ImgStatus, *status) {
 		return nil, fmt.Errorf("%w: status must be kept or rejected", ErrBadInput)
 	}
@@ -985,13 +1126,13 @@ func (s *Store) UpdateImage(id int64, status, caption *string) (*Image, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := s.bump(ctx, charID); err != nil {
+	if err := s.changed(ctx, charID, by, bot, []Change{{Kind: "image", Action: "edited", ImageID: &id}}); err != nil {
 		return nil, err
 	}
 	return s.GetImage(id)
 }
 
-func (s *Store) DeleteImage(id int64) error {
+func (s *Store) DeleteImage(id int64, by string, bot bool) error {
 	ctx, cancel := withCtx()
 	defer cancel()
 	var charID int64
@@ -1002,12 +1143,12 @@ func (s *Store) DeleteImage(id int64) error {
 	if err != nil {
 		return err
 	}
-	return s.bump(ctx, charID)
+	return s.changed(ctx, charID, by, bot, []Change{{Kind: "image", Action: "removed", ImageID: &id}})
 }
 
 // CropImage cuts rect out of image id at native resolution and stores the
 // result as a "cropped" image of the same character.
-func (s *Store) CropImage(id int64, rect CropRect, by string) (*Image, bool, error) {
+func (s *Store) CropImage(id int64, rect CropRect, by string, bot bool) (*Image, bool, error) {
 	src, err := s.GetImage(id)
 	if err != nil {
 		return nil, false, err
@@ -1024,7 +1165,7 @@ func (s *Store) CropImage(id int64, rect CropRect, by string) (*Image, bool, err
 	if err != nil {
 		return nil, false, err
 	}
-	return s.AddImage(src.CharID, "cropped", &id, "", src.Caption, by, out)
+	return s.AddImage(src.CharID, "cropped", &id, "", src.Caption, by, bot, out)
 }
 
 // ---- handlers ----
@@ -1064,9 +1205,25 @@ func requireHxh(auth *shared.Store, admin bool) func(http.Handler) http.Handler 
 				http.Error(w, "Forbidden", http.StatusForbidden)
 				return
 			}
-			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxUser, username)))
+			bot, err := auth.IsBot(username)
+			if err != nil {
+				log.Printf("[hxh db] bot check error: %v", err)
+				http.Error(w, "internal error", http.StatusInternalServerError)
+				return
+			}
+			ctx := context.WithValue(context.WithValue(r.Context(), ctxUser, username), ctxBot, bot)
+			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+const ctxBot ctxKey = 2
+
+// botOf says whether the request's user is a bot (the change log's
+// litmus: a bot's change needs review, a person's is self-approved).
+func botOf(r *http.Request) bool {
+	b, _ := r.Context().Value(ctxBot).(bool)
+	return b
 }
 
 func idParam(r *http.Request, name string) (int64, bool) {
@@ -1407,7 +1564,7 @@ func handlePatchChar(store *Store) http.HandlerFunc {
 			fail(w, fmt.Errorf("%w: bad json", ErrBadInput), "patch")
 			return
 		}
-		c, err := store.UpdateChar(id, patch)
+		c, err := store.UpdateChar(id, patch, userOf(r), botOf(r))
 		if err != nil {
 			fail(w, err, "patch char")
 			return
@@ -1506,7 +1663,7 @@ func handleUpload(store *Store) http.HandlerFunc {
 			}
 			sourceID = &n
 		}
-		im, created, err := store.AddImage(charID, typ, sourceID, get("source_url"), get("caption"), userOf(r), data)
+		im, created, err := store.AddImage(charID, typ, sourceID, get("source_url"), get("caption"), userOf(r), botOf(r), data)
 		if err != nil {
 			fail(w, err, "upload")
 			return
@@ -1577,7 +1734,7 @@ func handlePatchImage(store *Store) http.HandlerFunc {
 			fail(w, fmt.Errorf("%w: bad json", ErrBadInput), "patch image")
 			return
 		}
-		im, err := store.UpdateImage(id, body.Status, body.Caption)
+		im, err := store.UpdateImage(id, body.Status, body.Caption, userOf(r), botOf(r))
 		if err != nil {
 			fail(w, err, "patch image")
 			return
@@ -1593,7 +1750,7 @@ func handleDeleteImage(store *Store) http.HandlerFunc {
 			fail(w, ErrNotFound, "")
 			return
 		}
-		if err := store.DeleteImage(id); err != nil {
+		if err := store.DeleteImage(id, userOf(r), botOf(r)); err != nil {
 			fail(w, err, "delete image")
 			return
 		}
@@ -1613,7 +1770,7 @@ func handleCrop(store *Store) http.HandlerFunc {
 			fail(w, fmt.Errorf("%w: bad json", ErrBadInput), "crop")
 			return
 		}
-		im, created, err := store.CropImage(id, rect, userOf(r))
+		im, created, err := store.CropImage(id, rect, userOf(r), botOf(r))
 		if err != nil {
 			fail(w, err, "crop")
 			return

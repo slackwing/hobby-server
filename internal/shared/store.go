@@ -459,6 +459,18 @@ func (s *Store) ListMembers(website string) ([]Member, error) {
 }
 
 // IsMember reports whether the user holds any role on the website.
+// IsBot says whether the account is a bot (false for an unknown name).
+func (s *Store) IsBot(username string) (bool, error) {
+	ctx, cancel := withCtx()
+	defer cancel()
+	var bot bool
+	err := s.pool.QueryRow(ctx, `SELECT is_bot FROM hobby_server_user WHERE username = $1`, username).Scan(&bot)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return bot, err
+}
+
 func (s *Store) IsMember(username, website string) (bool, error) {
 	ctx, cancel := withCtx()
 	defer cancel()

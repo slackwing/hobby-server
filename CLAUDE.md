@@ -130,6 +130,18 @@ state, etc.) as needed.
   nothing outside that stretch changes — and answers with the whole
   list (the Roster DB app's drag-and-drop calls it; versions do not
   bump). `/chars` and `/db/binder` order by card_number then id.
+  Change log (changeset 012, 2026-09-21): `hxh_char_change` — one row
+  per field set (old/new) or picture added/removed/edited, under the
+  version that change made, with owner and a `bot` flag (the request
+  middleware looks up `is_bot` and puts it in the context, `botOf`).
+  Every version bump goes through `Store.changed`, which also sends an
+  accepted/rejected character back to pending when the BOT changed it
+  (a review-log "pending" line says what); a person's change is
+  self-approved. A patch that changes nothing does not bump. The
+  character payload carries `baseline` (the last accepted/rejected
+  verdict) and `changes` above it; the app marks the bot's ones "New".
+  The review log holds verdicts only — requests no longer mirror into
+  it (their table and window are the record).
   The 2026-09-17 `hxh_characters` roster tables stay as a cross-check
   source.
 - `internal/hxh/chat.go` + `hub.go` — the chat endpoints, profile-run
