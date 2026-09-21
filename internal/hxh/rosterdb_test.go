@@ -336,3 +336,17 @@ func TestPatchCardNumberNeedsANumberedCard(t *testing.T) {
 		t.Fatalf("numbered card: got %v, %v", err, c.CardNumber)
 	}
 }
+
+// A skipped stub is a valid character state but never a verdict.
+func TestSkippedIsAStateNotAVerdict(t *testing.T) {
+	if !in(CharStatus, "skipped") || in(Verdicts, "skipped") {
+		t.Fatal("skipped must be a state and not a verdict")
+	}
+	c := &Char{Name: "Mito", Rank: "C", ReviewStatus: "skipped", NenTypes: []string{}, Arcs: []string{"hunter-exam"}, Arms: []string{}}
+	if err := validateCharValues(c); err != nil {
+		t.Fatalf("a skipped stub must validate: %v", err)
+	}
+	if _, err := (&Store{}).Review(1, "skipped", "", "abi", false); !errors.Is(err, ErrBadInput) {
+		t.Fatalf("skipped as a verdict: want ErrBadInput, got %v", err)
+	}
+}

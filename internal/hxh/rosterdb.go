@@ -68,9 +68,13 @@ var (
 	NenTypes   = []string{"enhancement", "transmutation", "conjuration", "emission", "manipulation", "specialization"}
 	ArcSlugs   = []string{"hunter-exam", "zoldyck-family", "heavens-arena", "yorknew-city", "greed-island", "chimera-ant", "chairman-election"}
 	Ranks      = []string{"S", "A", "B", "C"}
-	CharStatus = []string{"pending", "accepted", "rejected"}
-	Verdicts   = CharStatus // what a reviewer sets; requests are a count, not a state (Andrew, 2026-09-21)
-	ImgStatus  = []string{"kept", "rejected"}
+	CharStatus = []string{"pending", "accepted", "rejected", "skipped"}
+	Verdicts   = []string{"pending", "accepted", "rejected"} // what a reviewer sets; requests are a count, not a state (Andrew, 2026-09-21)
+	// "skipped" (Andrew, 2026-09-21): a stub the bot filed for a character
+	// deliberately left out — name, arc and one line why, no pictures. It is
+	// frozen: no verdict, no edit, no picture, no request, and never a
+	// number, until the bot resurrects it (sets it pending) on Andrew's word.
+	ImgStatus = []string{"kept", "rejected"}
 )
 
 const (
@@ -650,6 +654,57 @@ func diffChar(before, after *Char) []Change {
 	return out
 }
 
+// errFrozen is the answer to any verdict, edit, picture or request on a
+// skipped stub.
+var errFrozen = fmt.Errorf("%w: a skipped character is frozen until the bot resurrects it", ErrBadInput)
+
+// frozen says whether the character is a skipped stub (ErrNotFound if
+// there is no such character).
+func (s *Store) frozen(ctx context.Context, id int64) error {
+	var st string
+	err := s.pool.QueryRow(ctx, `SELECT review_status FROM hxh_char WHERE id = $1`, id).Scan(&st)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if st == "skipped" {
+		return errFrozen
+	}
+	return nil
+}
+
+// Resurrect puts a skipped stub back to pending — the bot's act, on
+// Andrew's word — so the reviewers see it and the bot researches it.
+func (s *Store) Resurrect(id int64, by string) (*Char, error) {
+	ctx, cancel := withCtx()
+	defer cancel()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var version int
+	err = tx.QueryRow(ctx, `UPDATE hxh_char SET review_status = 'pending', review_reason = '' WHERE id = $1 AND review_status = 'skipped' RETURNING version`, id).Scan(&version)
+	if errors.Is(err, pgx.ErrNoRows) {
+		if err := s.frozen(ctx, id); errors.Is(err, ErrNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("%w: character %d is not skipped", ErrBadInput, id)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO hxh_char_review (char_id, version, status, reason, owner) VALUES ($1, $2, 'pending', 'resurrected', $3)`, id, version, by); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return s.GetChar(id)
+}
+
 // snapshotExpr is the accepted card as JSON, built from the row itself
 // so Accept and a person's edit write the same shape (and the 014
 // changeset's backfill matches it). Keys are BinderCard's.
@@ -673,6 +728,9 @@ func (s *Store) Review(id int64, status, reason, owner string, bot bool) (*Char,
 	}
 	if bot {
 		return nil, fmt.Errorf("%w: a bot cannot pass a verdict", ErrBadInput)
+	}
+	if err := s.frozen(context.Background(), id); err != nil {
+		return nil, err
 	}
 	reason = strings.TrimSpace(reason)
 	if status != "rejected" {
@@ -786,6 +844,9 @@ func (s *Store) Request(charID int64, kind, text string, imageID *int64, owner s
 	if err != nil {
 		return nil, err
 	}
+	if err := s.frozen(ctx, charID); err != nil {
+		return nil, err
+	}
 	want := "character"
 	if imageID != nil {
 		want = "image"
@@ -897,7 +958,10 @@ func (s *Store) CreateChar(c Char) (*Char, error) {
 	if c.Rank == "" {
 		c.Rank = "C"
 	}
-	c.ReviewStatus = "pending"
+	if c.ReviewStatus != "skipped" {
+		c.ReviewStatus, c.ReviewReason = "pending", ""
+	}
+	c.ReviewReason = strings.TrimSpace(c.ReviewReason)
 	if err := validateCharValues(&c); err != nil {
 		return nil, err
 	}
@@ -905,10 +969,10 @@ func (s *Store) CreateChar(c Char) (*Char, error) {
 	defer cancel()
 	var id int64
 	err := s.pool.QueryRow(ctx, `INSERT INTO hxh_char
-		(name, name_ja, first, rank, nen_types, affiliation, arcs, arms, description, card_description, notes, owner)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+		(name, name_ja, first, rank, nen_types, affiliation, arcs, arms, description, card_description, notes, owner, review_status, review_reason)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
 		c.Name, c.NameJA, c.First, c.Rank, joinSlugs(c.NenTypes), c.Affiliation,
-		joinSlugs(c.Arcs), joinSlugs(c.Arms), c.Description, c.CardDesc, c.Notes, c.Owner).Scan(&id)
+		joinSlugs(c.Arcs), joinSlugs(c.Arms), c.Description, c.CardDesc, c.Notes, c.Owner, c.ReviewStatus, c.ReviewReason).Scan(&id)
 	if err != nil {
 		return nil, err
 	}
@@ -920,7 +984,7 @@ func validateCharValues(c *Char) error {
 		return fmt.Errorf("%w: rank must be S, A, B or C", ErrBadInput)
 	}
 	if !in(CharStatus, c.ReviewStatus) {
-		return fmt.Errorf("%w: review_status must be pending, accepted or rejected", ErrBadInput)
+		return fmt.Errorf("%w: review_status must be pending, accepted, rejected or skipped", ErrBadInput)
 	}
 	if err := validSlugList(c.NenTypes, NenTypes, 2); err != nil {
 		return fmt.Errorf("nen_types %w", err)
@@ -1029,6 +1093,9 @@ func (s *Store) UpdateChar(id int64, patch map[string]json.RawMessage, by string
 	if err != nil {
 		return nil, err
 	}
+	if before.ReviewStatus == "skipped" {
+		return nil, errFrozen
+	}
 	next := *before
 	c := &next
 	if err := applyPatch(c, patch); err != nil {
@@ -1133,6 +1200,9 @@ func (s *Store) AddImage(charID int64, typ string, sourceID *int64, sourceURL, c
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	if err := s.frozen(ctx, charID); err != nil {
+		return nil, false, err
+	}
 	if sourceID != nil {
 		var n int
 		if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM hxh_char_image WHERE id = $1 AND char_id = $2`, *sourceID, charID).Scan(&n); err != nil {
@@ -1343,6 +1413,7 @@ func MountRosterDB(r chi.Router, store *Store, auth *shared.Store) {
 			a.Post("/chars/{id}/review", handleReview(store))
 			a.Post("/chars/{id}/request", handleRequest(store))
 			a.Post("/chars/{id}/move", handleMove(store))
+			a.Post("/chars/{id}/resurrect", handleResurrect(store))
 			a.Get("/request-kinds", handleRequestKinds(store))
 			a.Get("/requests", handleListRequests(store))
 			a.Post("/requests/{id}/resolve", handleResolveRequest(store))
@@ -1568,6 +1639,23 @@ func handleMove(store *Store) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, list)
+	}
+}
+
+// handleResurrect: a skipped stub back to pending (the bot, on Andrew's word).
+func handleResurrect(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, ok := idParam(r, "id")
+		if !ok {
+			fail(w, ErrNotFound, "")
+			return
+		}
+		c, err := store.Resurrect(id, userOf(r))
+		if err != nil {
+			fail(w, err, "resurrect")
+			return
+		}
+		writeJSON(w, http.StatusOK, c)
 	}
 }
 

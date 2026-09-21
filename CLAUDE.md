@@ -160,6 +160,12 @@ state, etc.) as needed.
   cards only. Request statuses are open / done / dropped, and
   `POST /requests/{id}/resolve {status, note}` records how it ended
   (`resolution`); deleting a picture drops its open requests.
+  "skipped" (2026-09-21, no changeset): a fourth review_status for a
+  stub the bot files for a character deliberately left out (created
+  with `review_status: skipped` + `review_reason`; no pictures). It is
+  frozen — Review, patch, upload and requests answer 400 — until
+  `POST /chars/{id}/resurrect` (the bot, on Andrew's word) sets it
+  pending with a "resurrected" review-log line. Never numbered.
   The 2026-09-17 `hxh_characters` roster tables stay as a cross-check
   source.
 - `internal/hxh/chat.go` + `hub.go` — the chat endpoints, profile-run
