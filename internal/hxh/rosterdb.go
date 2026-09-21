@@ -86,7 +86,7 @@ var (
 
 type Char struct {
 	ID              int64          `json:"id"`
-	CardNumber      int            `json:"card_number"` // the binder position; not unique on purpose (Andrew, 2026-09-21)
+	CardNumber      *int           `json:"card_number"` // the binder position; nil until first accepted; not unique on purpose (Andrew, 2026-09-21)
 	Name            string         `json:"name"`
 	NameJA          string         `json:"name_ja"`
 	First           string         `json:"first"`
@@ -436,7 +436,7 @@ func (s *Store) ListChars(status, name string) ([]Char, error) {
 	ctx, cancel := withCtx()
 	defer cancel()
 	rows, err := s.pool.Query(ctx, `SELECT `+charCols+` FROM hxh_char c
-		WHERE ($1 = '' OR c.review_status = $1) AND ($2 = '' OR lower(c.name) = lower($2)) ORDER BY c.card_number, c.id`, status, strings.TrimSpace(name))
+		WHERE ($1 = '' OR c.review_status = $1) AND ($2 = '' OR lower(c.name) = lower($2)) ORDER BY c.card_number NULLS LAST, c.id`, status, strings.TrimSpace(name))
 	if err != nil {
 		return nil, err
 	}
@@ -640,7 +640,13 @@ func diffChar(before, after *Char) []Change {
 	set("notes", before.Notes, after.Notes)
 	set("avatar_image_id", ref(before.AvatarImageID), ref(after.AvatarImageID))
 	set("card_image_id", ref(before.CardImageID), ref(after.CardImageID))
-	set("card_number", strconv.Itoa(before.CardNumber), strconv.Itoa(after.CardNumber))
+	num := func(p *int) string {
+		if p == nil {
+			return ""
+		}
+		return strconv.Itoa(*p)
+	}
+	set("card_number", num(before.CardNumber), num(after.CardNumber))
 	return out
 }
 
@@ -682,7 +688,8 @@ func (s *Store) Review(id int64, status, reason, owner string, bot bool) (*Char,
 	var version int
 	q := `UPDATE hxh_char SET review_status = $2, review_reason = $3 WHERE id = $1 RETURNING version`
 	if status == "accepted" {
-		q = `UPDATE hxh_char SET review_status = $2, review_reason = $3, accepted_version = version, accepted_snapshot = ` + snapshotExpr + ` WHERE id = $1 RETURNING version`
+		q = `UPDATE hxh_char SET review_status = $2, review_reason = $3, accepted_version = version, accepted_snapshot = ` + snapshotExpr + `,
+			card_number = COALESCE(card_number, (SELECT COALESCE(MAX(x.card_number), 0) + 1 FROM hxh_char x)) WHERE id = $1 RETURNING version`
 	}
 	err = tx.QueryRow(ctx, q, id, status, reason).Scan(&version)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -731,14 +738,18 @@ type Request struct {
 	CreatedAt  time.Time  `json:"created_at"`
 	ResolvedBy string     `json:"resolved_by"`
 	ResolvedAt *time.Time `json:"resolved_at"`
-	ImageID    *int64     `json:"image_id"` // set for a request on one picture
+	Resolution string     `json:"resolution"` // how it ended, in the resolver's words
+	ImageID    *int64     `json:"image_id"`   // set for a request on one picture
 }
 
-const requestCols = `q.id, q.char_id, q.kind, k.label, q.text, q.status, q.version, q.owner, q.created_at, q.resolved_by, q.resolved_at, q.image_id`
+// RequestStatus: open until the bot does it (done) or someone lets it go (dropped).
+var RequestStatus = []string{"open", "done", "dropped"}
+
+const requestCols = `q.id, q.char_id, q.kind, k.label, q.text, q.status, q.version, q.owner, q.created_at, q.resolved_by, q.resolved_at, q.resolution, q.image_id`
 const requestFrom = ` FROM hxh_char_request q JOIN hxh_request_kind k ON k.slug = q.kind `
 
 func scanRequest(row pgx.Row, q *Request) error {
-	return row.Scan(&q.ID, &q.CharID, &q.Kind, &q.Label, &q.Text, &q.Status, &q.Version, &q.Owner, &q.CreatedAt, &q.ResolvedBy, &q.ResolvedAt, &q.ImageID)
+	return row.Scan(&q.ID, &q.CharID, &q.Kind, &q.Label, &q.Text, &q.Status, &q.Version, &q.Owner, &q.CreatedAt, &q.ResolvedBy, &q.ResolvedAt, &q.Resolution, &q.ImageID)
 }
 
 func (s *Store) RequestKinds() ([]RequestKind, error) {
@@ -830,7 +841,7 @@ func (s *Store) ListRequests(status string) ([]Request, error) {
 	out := []Request{}
 	for rows.Next() {
 		var q Request
-		if err := rows.Scan(&q.ID, &q.CharID, &q.Kind, &q.Label, &q.Text, &q.Status, &q.Version, &q.Owner, &q.CreatedAt, &q.ResolvedBy, &q.ResolvedAt, &q.ImageID, &q.CharName); err != nil {
+		if err := rows.Scan(&q.ID, &q.CharID, &q.Kind, &q.Label, &q.Text, &q.Status, &q.Version, &q.Owner, &q.CreatedAt, &q.ResolvedBy, &q.ResolvedAt, &q.Resolution, &q.ImageID, &q.CharName); err != nil {
 			return nil, err
 		}
 		out = append(out, q)
@@ -838,9 +849,16 @@ func (s *Store) ListRequests(status string) ([]Request, error) {
 	return out, rows.Err()
 }
 
-// ResolveRequest marks an open request done; when it was the character's
-// last open one, the character goes back to pending for the reviewer.
-func (s *Store) ResolveRequest(id int64, by string) (*Request, error) {
+// ResolveRequest closes an open request: done (the work happened) or
+// dropped (nobody will do it — the bot could not, or the reviewer let it
+// go), with a note in the resolver's words. Verdicts are untouched.
+func (s *Store) ResolveRequest(id int64, by, status, note string) (*Request, error) {
+	if status == "" {
+		status = "done"
+	}
+	if status == "open" || !in(RequestStatus, status) {
+		return nil, fmt.Errorf("%w: a request is resolved as done or dropped", ErrBadInput)
+	}
 	ctx, cancel := withCtx()
 	defer cancel()
 	tx, err := s.pool.Begin(ctx)
@@ -849,8 +867,8 @@ func (s *Store) ResolveRequest(id int64, by string) (*Request, error) {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	var charID int64
-	err = tx.QueryRow(ctx, `UPDATE hxh_char_request SET status = 'done', resolved_by = $2, resolved_at = NOW()
-		WHERE id = $1 AND status = 'open' RETURNING char_id`, id, by).Scan(&charID)
+	err = tx.QueryRow(ctx, `UPDATE hxh_char_request SET status = $3, resolved_by = $2, resolved_at = NOW(), resolution = $4
+		WHERE id = $1 AND status = 'open' RETURNING char_id`, id, by, status, strings.TrimSpace(note)).Scan(&charID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		var st string
 		if err := tx.QueryRow(ctx, `SELECT status FROM hxh_char_request WHERE id = $1`, id).Scan(&st); err != nil {
@@ -887,8 +905,8 @@ func (s *Store) CreateChar(c Char) (*Char, error) {
 	defer cancel()
 	var id int64
 	err := s.pool.QueryRow(ctx, `INSERT INTO hxh_char
-		(name, name_ja, first, rank, nen_types, affiliation, arcs, arms, description, card_description, notes, owner, card_number)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, (SELECT COALESCE(MAX(card_number), 0) + 1 FROM hxh_char)) RETURNING id`,
+		(name, name_ja, first, rank, nen_types, affiliation, arcs, arms, description, card_description, notes, owner)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
 		c.Name, c.NameJA, c.First, c.Rank, joinSlugs(c.NenTypes), c.Affiliation,
 		joinSlugs(c.Arcs), joinSlugs(c.Arms), c.Description, c.CardDesc, c.Notes, c.Owner).Scan(&id)
 	if err != nil {
@@ -990,9 +1008,12 @@ func applyPatch(c *Char, patch map[string]json.RawMessage) error {
 		}
 	}
 	if raw, ok := patch["card_number"]; ok {
-		var v int
-		if err := json.Unmarshal(raw, &v); err != nil || v < 0 {
+		var v *int
+		if err := json.Unmarshal(raw, &v); err != nil || v == nil || *v < 0 {
 			return fmt.Errorf("%w: card_number must be a whole number", ErrBadInput)
+		}
+		if c.CardNumber == nil {
+			return fmt.Errorf("%w: a card gets its number when it is first accepted", ErrBadInput)
 		}
 		c.CardNumber = v
 	}
@@ -1195,7 +1216,7 @@ func (s *Store) DeleteImage(id int64, by string, bot bool) error {
 		return err
 	}
 	// a request on a picture that is gone is moot: withdrawn, in the deleter's name
-	if _, err := tx.Exec(ctx, `UPDATE hxh_char_request SET status = 'withdrawn', resolved_by = $2, resolved_at = NOW()
+	if _, err := tx.Exec(ctx, `UPDATE hxh_char_request SET status = 'dropped', resolved_by = $2, resolved_at = NOW(), resolution = 'picture deleted'
 		WHERE image_id = $1 AND status = 'open'`, id, by); err != nil {
 		return err
 	}
@@ -1360,8 +1381,8 @@ type BinderCard struct {
 func (s *Store) Binder() ([]BinderCard, error) {
 	ctx, cancel := withCtx()
 	defer cancel()
-	rows, err := s.pool.Query(ctx, `SELECT id, card_number, accepted_version, accepted_snapshot FROM hxh_char
-		WHERE accepted_snapshot IS NOT NULL ORDER BY card_number, id`)
+	rows, err := s.pool.Query(ctx, `SELECT id, COALESCE(card_number, 0), accepted_version, accepted_snapshot FROM hxh_char
+		WHERE accepted_snapshot IS NOT NULL ORDER BY card_number NULLS LAST, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -1478,7 +1499,23 @@ func (s *Store) Move(id, after int64) ([]Char, error) {
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	rows, err := tx.Query(ctx, `SELECT id, card_number FROM hxh_char ORDER BY card_number, id FOR UPDATE`)
+	for _, cid := range []int64{id, after} {
+		if cid == 0 {
+			continue
+		}
+		var n *int
+		err := tx.QueryRow(ctx, `SELECT card_number FROM hxh_char WHERE id = $1`, cid).Scan(&n)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		if err != nil {
+			return nil, err
+		}
+		if n == nil {
+			return nil, fmt.Errorf("%w: character %d has no number until it is accepted", ErrBadInput, cid)
+		}
+	}
+	rows, err := tx.Query(ctx, `SELECT id, card_number FROM hxh_char WHERE card_number IS NOT NULL ORDER BY card_number, id FOR UPDATE`)
 	if err != nil {
 		return nil, err
 	}
@@ -1589,7 +1626,17 @@ func handleResolveRequest(store *Store) http.HandlerFunc {
 			fail(w, ErrNotFound, "")
 			return
 		}
-		q, err := store.ResolveRequest(id, userOf(r))
+		var body struct {
+			Status string `json:"status"`
+			Note   string `json:"note"`
+		}
+		if r.ContentLength != 0 {
+			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body); err != nil {
+				fail(w, fmt.Errorf("%w: bad json", ErrBadInput), "resolve request")
+				return
+			}
+		}
+		q, err := store.ResolveRequest(id, userOf(r), body.Status, body.Note)
 		if err != nil {
 			fail(w, err, "resolve request")
 			return

@@ -155,6 +155,11 @@ state, etc.) as needed.
   a count (`open_requests`), not a state: filing, resolving and
   verdicts never touch each other. Guards: a bot cannot pass a
   verdict; a picture on an accepted card cannot be deleted (409).
+  Changeset 015 (2026-09-21): `card_number` is NULL until the first
+  Accept, which hands out max+1; `/chars/{id}/move` works on numbered
+  cards only. Request statuses are open / done / dropped, and
+  `POST /requests/{id}/resolve {status, note}` records how it ended
+  (`resolution`); deleting a picture drops its open requests.
   The 2026-09-17 `hxh_characters` roster tables stay as a cross-check
   source.
 - `internal/hxh/chat.go` + `hub.go` — the chat endpoints, profile-run

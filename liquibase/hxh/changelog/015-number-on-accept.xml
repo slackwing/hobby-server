@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        Andrew, 2026-09-21: a card has no number until it is first
+        accepted (pending and rejected numbers were confusing); Accept
+        hands out the next one. Request statuses read open / done /
+        dropped, and a resolution note says how a request ended.
+    -->
+
+    <changeSet id="015-number-on-accept" author="hxh">
+        <dropNotNullConstraint tableName="hxh_char" columnName="card_number" columnDataType="INT"/>
+        <dropDefaultValue tableName="hxh_char" columnName="card_number" columnDataType="INT"/>
+        <sql>UPDATE hxh_char SET card_number = NULL WHERE accepted_version IS NULL;</sql>
+    </changeSet>
+
+    <changeSet id="015-request-dropped" author="hxh">
+        <addColumn tableName="hxh_char_request">
+            <column name="resolution" type="TEXT" defaultValue="">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+        <sql>UPDATE hxh_char_request SET status = 'dropped' WHERE status = 'withdrawn';</sql>
+    </changeSet>
+
+</databaseChangeLog>

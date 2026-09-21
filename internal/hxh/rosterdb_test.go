@@ -259,12 +259,13 @@ func TestMoveOrder(t *testing.T) {
 
 func TestDiffCharListsOnlyWhatChanged(t *testing.T) {
 	seven := int64(7)
-	before := &Char{Name: "Gon", NenTypes: []string{"enhancement"}, Arcs: []string{"hunter-exam"}, Arms: []string{}, CardNumber: 1}
+	one, three := 1, 3
+	before := &Char{Name: "Gon", NenTypes: []string{"enhancement"}, Arcs: []string{"hunter-exam"}, Arms: []string{}, CardNumber: &one}
 	after := *before
 	after.Name = "Gon Freecss"
 	after.NenTypes = []string{"enhancement", "emission"}
 	after.AvatarImageID = &seven
-	after.CardNumber = 3
+	after.CardNumber = &three
 	rows := diffChar(before, &after)
 	got := map[string][2]string{}
 	for _, r := range rows {
@@ -309,5 +310,29 @@ func TestSnapshotKeysMatchBinderCard(t *testing.T) {
 		if !strings.Contains(snapshotExpr, key) {
 			t.Fatalf("snapshotExpr lacks %s", key)
 		}
+	}
+}
+
+func TestResolveRequestStatuses(t *testing.T) {
+	for _, st := range []string{"open", "withdrawn", "maybe"} {
+		if _, err := (&Store{}).ResolveRequest(1, "claude", st, ""); !errors.Is(err, ErrBadInput) {
+			t.Fatalf("%q: want ErrBadInput, got %v", st, err)
+		}
+	}
+	if !in(RequestStatus, "dropped") || in(RequestStatus, "withdrawn") {
+		t.Fatal("statuses are open, done, dropped")
+	}
+}
+
+func TestPatchCardNumberNeedsANumberedCard(t *testing.T) {
+	c := &Char{Name: "Gon", Rank: "C", ReviewStatus: "pending", NenTypes: []string{}, Arcs: []string{}, Arms: []string{}}
+	err := applyPatch(c, map[string]json.RawMessage{"card_number": json.RawMessage("5")})
+	if !errors.Is(err, ErrBadInput) {
+		t.Fatalf("unnumbered card: want ErrBadInput, got %v", err)
+	}
+	one := 1
+	c.CardNumber = &one
+	if err := applyPatch(c, map[string]json.RawMessage{"card_number": json.RawMessage("5")}); err != nil || *c.CardNumber != 5 {
+		t.Fatalf("numbered card: got %v, %v", err, c.CardNumber)
 	}
 }

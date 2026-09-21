@@ -25,5 +25,6 @@
     <include file="changelog/012-change-log.xml"/>
     <include file="changelog/013-request-scope.xml"/>
     <include file="changelog/014-accepted-version.xml"/>
+    <include file="changelog/015-number-on-accept.xml"/>
 
 </databaseChangeLog>
