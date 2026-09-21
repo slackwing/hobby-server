@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -196,5 +197,26 @@ func TestDecodeUploadReadsWebPAtFullRange(t *testing.T) {
 	r, g, b, _ = d.img.At(56, 32).RGBA()
 	if r>>8 < 253 || g>>8 < 253 || b>>8 < 253 {
 		t.Fatalf("white half decoded as (%d,%d,%d), want ~255", r>>8, g>>8, b>>8)
+	}
+}
+
+func TestRequestLogReason(t *testing.T) {
+	if got := requestLogReason("Extend picture", ""); got != "Extend picture" {
+		t.Fatalf("got %q", got)
+	}
+	if got := requestLogReason("Extend picture", "hair cut off"); got != "Extend picture: hair cut off" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+// "requested" is a state only a request can put a character in; a
+// reviewer's verdict is one of the three.
+func TestReviewRefusesRequestedAsVerdict(t *testing.T) {
+	_, err := (&Store{}).Review(1, "requested", "", "abi")
+	if !errors.Is(err, ErrBadInput) {
+		t.Fatalf("want ErrBadInput, got %v", err)
+	}
+	if !in(CharStatus, "requested") {
+		t.Fatal("requested must still be a valid character status")
 	}
 }

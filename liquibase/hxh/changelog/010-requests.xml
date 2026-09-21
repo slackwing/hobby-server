@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        Requests (Andrew, 2026-09-21): a reviewer asks the bot for work on
+        a character — a kind (slug from hxh_request_kind, so new kinds are
+        a changeset) plus free text. While a request is open the
+        character's review_status is "requested"; resolving the last open
+        one puts it back to "pending" for the reviewer. A reviewer's own
+        verdict while requests are open withdraws them.
+    -->
+
+    <changeSet id="010-request-kinds" author="hxh">
+        <createTable tableName="hxh_request_kind">
+            <column name="slug" type="VARCHAR(40)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="label" type="VARCHAR(80)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="sort" type="INT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <insert tableName="hxh_request_kind">
+            <column name="slug" value="extend-picture"/>
+            <column name="label" value="Extend picture"/>
+            <column name="sort" valueNumeric="1"/>
+        </insert>
+        <insert tableName="hxh_request_kind">
+            <column name="slug" value="card-description"/>
+            <column name="label" value="Card description"/>
+            <column name="sort" valueNumeric="2"/>
+        </insert>
+    </changeSet>
+
+    <changeSet id="010-char-requests" author="hxh">
+        <createTable tableName="hxh_char_request">
+            <column name="id" type="BIGINT" autoIncrement="true">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="char_id" type="BIGINT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="kind" type="VARCHAR(40)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="text" type="TEXT" defaultValue="">
+                <constraints nullable="false"/>
+            </column>
+            <column name="status" type="VARCHAR(10)" defaultValue="open">
+                <constraints nullable="false"/>
+            </column>
+            <column name="version" type="INT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="owner" type="VARCHAR(50)" defaultValue="">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+            <column name="resolved_by" type="VARCHAR(50)" defaultValue="">
+                <constraints nullable="false"/>
+            </column>
+            <column name="resolved_at" type="TIMESTAMPTZ"/>
+        </createTable>
+        <addForeignKeyConstraint
+            constraintName="fk_hxh_char_request_char"
+            baseTableName="hxh_char_request" baseColumnNames="char_id"
+            referencedTableName="hxh_char" referencedColumnNames="id"
+            onDelete="CASCADE"/>
+        <addForeignKeyConstraint
+            constraintName="fk_hxh_char_request_kind"
+            baseTableName="hxh_char_request" baseColumnNames="kind"
+            referencedTableName="hxh_request_kind" referencedColumnNames="slug"/>
+        <createIndex tableName="hxh_char_request" indexName="idx_hxh_char_request_char">
+            <column name="char_id"/>
+        </createIndex>
+        <createIndex tableName="hxh_char_request" indexName="idx_hxh_char_request_status">
+            <column name="status"/>
+            <column name="created_at"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

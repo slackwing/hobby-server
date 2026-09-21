@@ -68,7 +68,8 @@ var (
 	NenTypes   = []string{"enhancement", "transmutation", "conjuration", "emission", "manipulation", "specialization"}
 	ArcSlugs   = []string{"hunter-exam", "zoldyck-family", "heavens-arena", "yorknew-city", "greed-island", "chimera-ant", "chairman-election"}
 	Ranks      = []string{"S", "A", "B", "C"}
-	CharStatus = []string{"pending", "accepted", "rejected"}
+	CharStatus = []string{"pending", "requested", "accepted", "rejected"}
+	Verdicts   = []string{"pending", "accepted", "rejected"} // what a reviewer sets; "requested" comes only from a request
 	ImgStatus  = []string{"kept", "rejected"}
 )
 
@@ -108,6 +109,7 @@ type Char struct {
 	ImageCounts   map[string]int `json:"image_counts"` // per type, for the list's Pics column
 	Images        []Image        `json:"images,omitempty"`
 	Reviews       []Review       `json:"reviews,omitempty"`
+	Requests      []Request      `json:"requests,omitempty"`
 }
 
 // Review is one verdict from the log.
@@ -457,7 +459,23 @@ func (s *Store) GetChar(id int64) (*Char, error) {
 		}
 		c.Reviews = append(c.Reviews, r)
 	}
-	return c, rv.Err()
+	if err := rv.Err(); err != nil {
+		return nil, err
+	}
+	rq, err := s.pool.Query(ctx, `SELECT `+requestCols+requestFrom+`WHERE q.char_id = $1 ORDER BY q.created_at DESC, q.id DESC`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rq.Close()
+	c.Requests = []Request{}
+	for rq.Next() {
+		var q Request
+		if err := scanRequest(rq, &q); err != nil {
+			return nil, err
+		}
+		c.Requests = append(c.Requests, q)
+	}
+	return c, rq.Err()
 }
 
 // bump counts a change to the character or its pictures.
@@ -469,7 +487,7 @@ func (s *Store) bump(ctx context.Context, charID int64) error {
 // Review records a verdict on the character's current version. A
 // rejection may carry a reason (Andrew, 2026-09-19: optional).
 func (s *Store) Review(id int64, status, reason, owner string) (*Char, error) {
-	if !in(CharStatus, status) {
+	if !in(Verdicts, status) {
 		return nil, fmt.Errorf("%w: status must be pending, accepted or rejected", ErrBadInput)
 	}
 	reason = strings.TrimSpace(reason)
@@ -495,10 +513,190 @@ func (s *Store) Review(id int64, status, reason, owner string) (*Char, error) {
 		id, version, status, reason, owner); err != nil {
 		return nil, err
 	}
+	// a reviewer's own verdict overrides whatever they had asked the bot for
+	if _, err := tx.Exec(ctx, `UPDATE hxh_char_request SET status = 'withdrawn', resolved_by = $2, resolved_at = NOW()
+		WHERE char_id = $1 AND status = 'open'`, id, owner); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
 	return s.GetChar(id)
+}
+
+/* ---------- requests: a reviewer asks the bot for work ---------- */
+
+// RequestKind is a category of work a reviewer can ask for (Andrew,
+// 2026-09-21: "Extend picture", "Card description", more later). Slugs
+// live in hxh_request_kind so a new kind is a changeset, not a release.
+type RequestKind struct {
+	Slug  string `json:"slug"`
+	Label string `json:"label"`
+	Sort  int    `json:"sort"`
+}
+
+// Request is one ask: a kind, free text, and its state — open until the
+// bot resolves it (done) or the reviewer's own verdict overrides it
+// (withdrawn). While a character has an open request its review_status
+// is "requested"; resolving the last one puts it back to "pending".
+type Request struct {
+	ID         int64      `json:"id"`
+	CharID     int64      `json:"char_id"`
+	CharName   string     `json:"char_name,omitempty"`
+	Kind       string     `json:"kind"`
+	Label      string     `json:"label"`
+	Text       string     `json:"text"`
+	Status     string     `json:"status"`
+	Version    int        `json:"version"`
+	Owner      string     `json:"owner"`
+	CreatedAt  time.Time  `json:"created_at"`
+	ResolvedBy string     `json:"resolved_by"`
+	ResolvedAt *time.Time `json:"resolved_at"`
+}
+
+const requestCols = `q.id, q.char_id, q.kind, k.label, q.text, q.status, q.version, q.owner, q.created_at, q.resolved_by, q.resolved_at`
+const requestFrom = ` FROM hxh_char_request q JOIN hxh_request_kind k ON k.slug = q.kind `
+
+func scanRequest(row pgx.Row, q *Request) error {
+	return row.Scan(&q.ID, &q.CharID, &q.Kind, &q.Label, &q.Text, &q.Status, &q.Version, &q.Owner, &q.CreatedAt, &q.ResolvedBy, &q.ResolvedAt)
+}
+
+func (s *Store) RequestKinds() ([]RequestKind, error) {
+	ctx, cancel := withCtx()
+	defer cancel()
+	rows, err := s.pool.Query(ctx, `SELECT slug, label, sort FROM hxh_request_kind ORDER BY sort, slug`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []RequestKind{}
+	for rows.Next() {
+		var k RequestKind
+		if err := rows.Scan(&k.Slug, &k.Label, &k.Sort); err != nil {
+			return nil, err
+		}
+		out = append(out, k)
+	}
+	return out, rows.Err()
+}
+
+// requestLogReason is what the review log shows for a request.
+func requestLogReason(label, text string) string {
+	if text == "" {
+		return label
+	}
+	return label + ": " + text
+}
+
+// Request files an ask against the character's current version and
+// marks the character "requested" until the bot resolves it.
+func (s *Store) Request(charID int64, kind, text, owner string) (*Char, error) {
+	kind, text = strings.TrimSpace(kind), strings.TrimSpace(text)
+	ctx, cancel := withCtx()
+	defer cancel()
+	var label string
+	err := s.pool.QueryRow(ctx, `SELECT label FROM hxh_request_kind WHERE slug = $1`, kind).Scan(&label)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("%w: unknown request kind %q", ErrBadInput, kind)
+	}
+	if err != nil {
+		return nil, err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var version int
+	err = tx.QueryRow(ctx, `UPDATE hxh_char SET review_status = 'requested', review_reason = '' WHERE id = $1 RETURNING version`, charID).Scan(&version)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO hxh_char_request (char_id, kind, text, version, owner) VALUES ($1, $2, $3, $4, $5)`,
+		charID, kind, text, version, owner); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO hxh_char_review (char_id, version, status, reason, owner) VALUES ($1, $2, 'requested', $3, $4)`,
+		charID, version, requestLogReason(label, text), owner); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return s.GetChar(charID)
+}
+
+// ListRequests is the queue: open ones first, oldest first within.
+func (s *Store) ListRequests(status string) ([]Request, error) {
+	ctx, cancel := withCtx()
+	defer cancel()
+	rows, err := s.pool.Query(ctx, `SELECT `+requestCols+`, c.name`+requestFrom+`JOIN hxh_char c ON c.id = q.char_id
+		WHERE ($1 = '' OR q.status = $1) ORDER BY (q.status = 'open') DESC, q.created_at, q.id`, status)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Request{}
+	for rows.Next() {
+		var q Request
+		if err := rows.Scan(&q.ID, &q.CharID, &q.Kind, &q.Label, &q.Text, &q.Status, &q.Version, &q.Owner, &q.CreatedAt, &q.ResolvedBy, &q.ResolvedAt, &q.CharName); err != nil {
+			return nil, err
+		}
+		out = append(out, q)
+	}
+	return out, rows.Err()
+}
+
+// ResolveRequest marks an open request done; when it was the character's
+// last open one, the character goes back to pending for the reviewer.
+func (s *Store) ResolveRequest(id int64, by string) (*Request, error) {
+	ctx, cancel := withCtx()
+	defer cancel()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var charID int64
+	err = tx.QueryRow(ctx, `UPDATE hxh_char_request SET status = 'done', resolved_by = $2, resolved_at = NOW()
+		WHERE id = $1 AND status = 'open' RETURNING char_id`, id, by).Scan(&charID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		var st string
+		if err := tx.QueryRow(ctx, `SELECT status FROM hxh_char_request WHERE id = $1`, id).Scan(&st); err != nil {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("%w: request #%d is already %s", ErrBadInput, id, st)
+	}
+	if err != nil {
+		return nil, err
+	}
+	var open int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM hxh_char_request WHERE char_id = $1 AND status = 'open'`, charID).Scan(&open); err != nil {
+		return nil, err
+	}
+	if open == 0 {
+		var version int
+		err := tx.QueryRow(ctx, `UPDATE hxh_char SET review_status = 'pending' WHERE id = $1 AND review_status = 'requested' RETURNING version`, charID).Scan(&version)
+		if err == nil {
+			if _, err := tx.Exec(ctx, `INSERT INTO hxh_char_review (char_id, version, status, reason, owner) VALUES ($1, $2, 'pending', $3, $4)`,
+				charID, version, fmt.Sprintf("request #%d done", id), by); err != nil {
+				return nil, err
+			}
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return nil, err
+		}
+	}
+	var q Request
+	if err := scanRequest(tx.QueryRow(ctx, `SELECT `+requestCols+requestFrom+`WHERE q.id = $1`, id), &q); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return &q, nil
 }
 
 func (s *Store) CreateChar(c Char) (*Char, error) {
@@ -532,7 +730,7 @@ func validateCharValues(c *Char) error {
 		return fmt.Errorf("%w: rank must be S, A, B or C", ErrBadInput)
 	}
 	if !in(CharStatus, c.ReviewStatus) {
-		return fmt.Errorf("%w: review_status must be pending, accepted or rejected", ErrBadInput)
+		return fmt.Errorf("%w: review_status must be pending, requested, accepted or rejected", ErrBadInput)
 	}
 	if err := validSlugList(c.NenTypes, NenTypes, 2); err != nil {
 		return fmt.Errorf("nen_types %w", err)
@@ -898,6 +1096,10 @@ func MountRosterDB(r chi.Router, store *Store, auth *shared.Store) {
 			a.Get("/chars/{id}", handleGetChar(store))
 			a.Patch("/chars/{id}", handlePatchChar(store))
 			a.Post("/chars/{id}/review", handleReview(store))
+			a.Post("/chars/{id}/request", handleRequest(store))
+			a.Get("/request-kinds", handleRequestKinds(store))
+			a.Get("/requests", handleListRequests(store))
+			a.Post("/requests/{id}/resolve", handleResolveRequest(store))
 			a.Delete("/chars/{id}", handleDeleteChar(store))
 			a.Post("/chars/{id}/images", handleUpload(store))
 			a.Get("/images/{id}/meta", handleImageMeta(store))
@@ -935,10 +1137,76 @@ func handleBinder(store *Store) http.HandlerFunc {
 		}
 		out := make([]BinderCard, 0, len(chars))
 		for _, c := range chars {
+			if c.AvatarImageID == nil || c.CardImageID == nil { // a card needs both pictures (Andrew, 2026-09-21)
+				continue
+			}
 			out = append(out, BinderCard{ID: c.ID, Name: c.Name, First: c.First, Rank: c.Rank, NenTypes: c.NenTypes, Affiliation: c.Affiliation,
 				Arcs: c.Arcs, Arms: c.Arms, CardDesc: c.CardDesc, Description: c.Description, AvatarImageID: c.AvatarImageID, CardImageID: c.CardImageID, Version: c.Version})
 		}
 		writeJSON(w, http.StatusOK, out)
+	}
+}
+
+func handleRequestKinds(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		kinds, err := store.RequestKinds()
+		if err != nil {
+			fail(w, err, "request kinds")
+			return
+		}
+		writeJSON(w, http.StatusOK, kinds)
+	}
+}
+
+// handleRequest files a reviewer's ask: {kind, text}.
+func handleRequest(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, ok := idParam(r, "id")
+		if !ok {
+			fail(w, ErrNotFound, "")
+			return
+		}
+		var body struct {
+			Kind string `json:"kind"`
+			Text string `json:"text"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body); err != nil {
+			fail(w, fmt.Errorf("%w: bad json", ErrBadInput), "request")
+			return
+		}
+		c, err := store.Request(id, body.Kind, body.Text, userOf(r))
+		if err != nil {
+			fail(w, err, "request")
+			return
+		}
+		writeJSON(w, http.StatusOK, c)
+	}
+}
+
+func handleListRequests(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		reqs, err := store.ListRequests(r.URL.Query().Get("status"))
+		if err != nil {
+			fail(w, err, "list requests")
+			return
+		}
+		writeJSON(w, http.StatusOK, reqs)
+	}
+}
+
+func handleResolveRequest(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, ok := idParam(r, "id")
+		if !ok {
+			fail(w, ErrNotFound, "")
+			return
+		}
+		q, err := store.ResolveRequest(id, userOf(r))
+		if err != nil {
+			fail(w, err, "resolve request")
+			return
+		}
+		writeJSON(w, http.StatusOK, q)
 	}
 }
 

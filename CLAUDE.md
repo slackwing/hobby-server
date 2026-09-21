@@ -104,8 +104,21 @@ state, etc.) as needed.
   role; `POST /chars/{id}/review` passes a verdict (reason optional)
   and never bumps the version; the server does the cropping (exact
   source pixels, PNG). `GET /db/binder` (any hxh role) is the Binder's
-  source: the accepted characters' card fields only. Pure parts tested
+  source: the accepted characters that have BOTH an avatar and a card
+  picture (Andrew, 2026-09-21), card fields only. Pure parts tested
   in `rosterdb_test.go`.
+  Requests (changeset 010, 2026-09-21): a reviewer asks the bot for
+  work — `POST /chars/{id}/request {kind, text}` files a row in
+  `hxh_char_request` (kind = a slug from `hxh_request_kind`, seeded
+  `extend-picture` and `card-description`; a new kind is a changeset)
+  and puts the character in `review_status` "requested" (a fourth
+  state; the review log gets a "requested" line). `GET /requests?
+  status=open` is the queue, `POST /requests/{id}/resolve` marks one
+  done and, when it was the character's last open one, sets the
+  character back to "pending". A reviewer's verdict on a requested
+  character withdraws its open requests. The feathers CLI
+  (`hxh-roster/roster.py requests | resolve | kinds | request`) and
+  the skill's § 8b are how the bot works the queue.
   The 2026-09-17 `hxh_characters` roster tables stay as a cross-check
   source.
 - `internal/hxh/chat.go` + `hub.go` — the chat endpoints, profile-run
