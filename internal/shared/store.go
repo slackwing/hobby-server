@@ -672,9 +672,16 @@ func (s *Store) CreateSession(username string) (string, error) {
 	return token, nil
 }
 
-// GetSession resolves a session token to a username, sliding the
-// expiry when it drops under the refresh threshold.
-func (s *Store) GetSession(token string) (string, bool) {
+// GetSession resolves a session token to its username, refreshing a
+// session near expiry and touching last_seen_at (an authed request is a
+// person there). PeekSession is the same lookup WITHOUT the touch — for
+// a client's automatic requests (Beetle's socket handshake, history and
+// contacts fetches), which say an instance is open, not that anyone is
+// looking (presence, 2026-09-21).
+func (s *Store) GetSession(token string) (string, bool)  { return s.session(token, true) }
+func (s *Store) PeekSession(token string) (string, bool) { return s.session(token, false) }
+
+func (s *Store) session(token string, touch bool) (string, bool) {
 	if token == "" {
 		return "", false
 	}
@@ -704,7 +711,9 @@ func (s *Store) GetSession(token string) (string, bool) {
 	_, _ = s.pool.Exec(ctx, `
 		UPDATE hobby_server_session SET last_activity_at = $1, expires_at = $2 WHERE id = $3
 	`, now, newExpires, token)
-	s.TouchLastSeen(username)
+	if touch {
+		s.TouchLastSeen(username)
+	}
 	return username, true
 }
 

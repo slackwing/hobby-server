@@ -58,7 +58,9 @@ Plus `GET /healthz` at the server root (used by Docker healthcheck).
 
 - `GET  /api/hxh/chat/contacts` — every hxh member with presence:
   `online` = a person there in the last minute (a focused tab's ping,
-  a message, typing, a read, any authed request), `away` = one in the
+  a message, typing, a read, a profile or picture save, a page load —
+  not Beetle's own socket handshake or history/contacts fetches, which
+  only say an instance is open), `away` = one in the
   last hour OR an instance open (a live socket, or one that dropped
   < 2 min ago — a background tab stays away, never offline), `offline`
   otherwise, `nopass` = no password yet

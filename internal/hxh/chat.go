@@ -382,7 +382,7 @@ func (c *Chat) member(r *http.Request) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	username, ok := c.auth.GetSession(cookie.Value)
+	username, ok := c.auth.PeekSession(cookie.Value) // no last_seen touch: Beetle's own requests are automatic (presence, 2026-09-21)
 	if !ok {
 		return "", false
 	}
@@ -432,6 +432,7 @@ func (c *Chat) Mount(r chi.Router) {
 // height}; the client attaches the id to its next message.
 func (c *Chat) handleUploadImage(w http.ResponseWriter, r *http.Request) {
 	user := userOf(r)
+	c.auth.TouchLastSeen(user) // a person chose a picture
 	r.Body = http.MaxBytesReader(w, r.Body, MaxImageUpload)
 	data, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -557,6 +558,7 @@ func (c *Chat) handlePutProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	clean, _ := json.Marshal(runs)
+	c.auth.TouchLastSeen(userOf(r)) // a person edited their profile
 	if err := c.store.PutProfile(userOf(r), clean); err != nil {
 		log.Printf("[hxh chat] profile save error: %v", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
