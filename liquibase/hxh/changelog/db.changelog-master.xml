@@ -23,5 +23,7 @@
     <include file="changelog/010-requests.xml"/>
     <include file="changelog/011-card-number.xml"/>
     <include file="changelog/012-change-log.xml"/>
+    <include file="changelog/013-request-scope.xml"/>
+    <include file="changelog/014-accepted-version.xml"/>
 
 </databaseChangeLog>

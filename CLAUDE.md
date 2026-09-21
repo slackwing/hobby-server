@@ -113,7 +113,11 @@ state, etc.) as needed.
   `extend-picture` and `card-description`; a new kind is a changeset)
   and puts the character in `review_status` "requested" (a fourth
   state; the review log gets a "requested" line). `GET /requests?
-  status=open` is the queue, `POST /requests/{id}/resolve` marks one
+  status=open` is the queue (a request may name one picture:
+  `image_id`, changeset 013; kinds carry a scope character/image/any
+  and `needs_text` — seeded `card-description`, `outpaint-white`,
+  `other`; deleting a picture withdraws its open requests in the
+  deleter's name), `POST /requests/{id}/resolve` marks one
   done and, when it was the character's last open one, sets the
   character back to "pending". A reviewer's verdict on a requested
   character withdraws its open requests. The feathers CLI
@@ -142,6 +146,15 @@ state, etc.) as needed.
   verdict) and `changes` above it; the app marks the bot's ones "New".
   The review log holds verdicts only — requests no longer mirror into
   it (their table and window are the record).
+  Accepted is a VERSION (changeset 014, 2026-09-21): `accepted_version`
+  + `accepted_snapshot` (the card fields as JSON, `snapshotExpr`,
+  written by Accept and by a person's edit to an accepted character —
+  self-approved — never by a bot's). `GET /db/binder` prints the
+  snapshots (both pictures required), so a bot's edit shows nowhere
+  until re-accepted; the live row goes pending meanwhile. Requests are
+  a count (`open_requests`), not a state: filing, resolving and
+  verdicts never touch each other. Guards: a bot cannot pass a
+  verdict; a picture on an accepted card cannot be deleted (409).
   The 2026-09-17 `hxh_characters` roster tables stay as a cross-check
   source.
 - `internal/hxh/chat.go` + `hub.go` — the chat endpoints, profile-run

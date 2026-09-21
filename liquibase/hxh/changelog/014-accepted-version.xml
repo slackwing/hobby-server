@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        What is accepted is a VERSION (Andrew, 2026-09-21): accepted_version
+        points at it and accepted_snapshot holds that version's card
+        fields, which the Binder prints instead of the live row. Accept
+        moves the pointer; a person's edit to an accepted character
+        moves it too (self-approved); a bot's edit never does. The
+        expression here must match snapshotExpr in rosterdb.go.
+        "requested" stops being a review status: requests are a count.
+    -->
+
+    <changeSet id="014-accepted-version" author="hxh">
+        <addColumn tableName="hxh_char">
+            <column name="accepted_version" type="INT"/>
+            <column name="accepted_snapshot" type="JSONB"/>
+        </addColumn>
+        <sql>
+            UPDATE hxh_char SET accepted_version = version, accepted_snapshot = jsonb_build_object(
+                'name', name, 'first', first, 'rank', rank,
+                'nen_types', COALESCE(to_jsonb(string_to_array(NULLIF(nen_types, ''), ',')), '[]'::jsonb),
+                'affiliation', affiliation,
+                'arcs', COALESCE(to_jsonb(string_to_array(NULLIF(arcs, ''), ',')), '[]'::jsonb),
+                'arms', COALESCE(to_jsonb(string_to_array(NULLIF(arms, ''), ',')), '[]'::jsonb),
+                'card_description', card_description, 'description', description,
+                'avatar_image_id', avatar_image_id, 'card_image_id', card_image_id)
+            WHERE review_status = 'accepted';
+            UPDATE hxh_char SET review_status = 'pending' WHERE review_status = 'requested';
+        </sql>
+    </changeSet>
+
+</databaseChangeLog>

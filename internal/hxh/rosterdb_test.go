@@ -9,6 +9,7 @@ import (
 	"image/color"
 	"image/jpeg"
 	"image/png"
+	"strings"
 	"testing"
 )
 
@@ -200,15 +201,16 @@ func TestDecodeUploadReadsWebPAtFullRange(t *testing.T) {
 	}
 }
 
-// "requested" is a state only a request can put a character in; a
-// reviewer's verdict is one of the three.
-func TestReviewRefusesRequestedAsVerdict(t *testing.T) {
-	_, err := (&Store{}).Review(1, "requested", "", "abi")
-	if !errors.Is(err, ErrBadInput) {
-		t.Fatalf("want ErrBadInput, got %v", err)
+// A bot never passes a verdict; "requested" is no longer a state.
+func TestReviewRefusesBotsAndUnknownStates(t *testing.T) {
+	if _, err := (&Store{}).Review(1, "accepted", "", "claude", true); !errors.Is(err, ErrBadInput) {
+		t.Fatalf("bot verdict: want ErrBadInput, got %v", err)
 	}
-	if !in(CharStatus, "requested") {
-		t.Fatal("requested must still be a valid character status")
+	if _, err := (&Store{}).Review(1, "requested", "", "abi", false); !errors.Is(err, ErrBadInput) {
+		t.Fatalf("requested: want ErrBadInput, got %v", err)
+	}
+	if in(CharStatus, "requested") {
+		t.Fatal("requested must not be a character status")
 	}
 }
 
@@ -290,5 +292,22 @@ func TestSummarize(t *testing.T) {
 	rows := []Change{{Kind: "field", Field: "description"}, {Kind: "field", Field: "notes"}, {Kind: "image", Action: "added", ImageID: &id}, {Kind: "image", Action: "added", ImageID: &id}, {Kind: "image", Action: "removed", ImageID: &id}}
 	if got := summarize(rows); got != "changed description, notes; added 2 pictures; removed a picture" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+// The snapshot JSON must unmarshal into BinderCard by key.
+func TestSnapshotKeysMatchBinderCard(t *testing.T) {
+	snap := `{"name":"Gon","first":"Gon","rank":"S","nen_types":["enhancement"],"affiliation":"Hunter","arcs":["hunter-exam"],"arms":[],"card_description":"A boy.","description":"A boy from Whale Island.","avatar_image_id":12,"card_image_id":14}`
+	var card BinderCard
+	if err := json.Unmarshal([]byte(snap), &card); err != nil {
+		t.Fatal(err)
+	}
+	if card.Name != "Gon" || card.CardDesc != "A boy." || card.AvatarImageID == nil || *card.CardImageID != 14 || len(card.NenTypes) != 1 {
+		t.Fatalf("got %+v", card)
+	}
+	for _, key := range []string{"'name'", "'first'", "'rank'", "'nen_types'", "'affiliation'", "'arcs'", "'arms'", "'card_description'", "'description'", "'avatar_image_id'", "'card_image_id'"} {
+		if !strings.Contains(snapshotExpr, key) {
+			t.Fatalf("snapshotExpr lacks %s", key)
+		}
 	}
 }

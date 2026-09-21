@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        Requests on a picture (Andrew, 2026-09-21): the same request row,
+        with an optional image_id (no foreign key — deleting the picture
+        withdraws the request and the id stays as the record). Kinds get
+        a scope (character / image / any) and whether details are
+        required. "Extend picture" retires for "Outpaint White Region"
+        (the common case: the reviewer expanded the canvas, the bot
+        fills the white); "Other…" serves both scopes and needs text.
+    -->
+
+    <changeSet id="013-request-scope" author="hxh">
+        <addColumn tableName="hxh_request_kind">
+            <column name="scope" type="VARCHAR(10)" defaultValue="character">
+                <constraints nullable="false"/>
+            </column>
+            <column name="needs_text" type="BOOLEAN" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+        <addColumn tableName="hxh_char_request">
+            <column name="image_id" type="BIGINT"/>
+        </addColumn>
+        <insert tableName="hxh_request_kind">
+            <column name="slug" value="outpaint-white"/>
+            <column name="label" value="Outpaint White Region"/>
+            <column name="sort" valueNumeric="1"/>
+            <column name="scope" value="image"/>
+        </insert>
+        <insert tableName="hxh_request_kind">
+            <column name="slug" value="other"/>
+            <column name="label" value="Other…"/>
+            <column name="sort" valueNumeric="9"/>
+            <column name="scope" value="any"/>
+            <column name="needs_text" valueBoolean="true"/>
+        </insert>
+        <sql>
+            UPDATE hxh_char_request SET kind = 'outpaint-white' WHERE kind = 'extend-picture';
+            DELETE FROM hxh_request_kind WHERE slug = 'extend-picture';
+            UPDATE hxh_request_kind SET sort = 2 WHERE slug = 'card-description';
+        </sql>
+    </changeSet>
+
+</databaseChangeLog>

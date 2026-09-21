@@ -68,8 +68,8 @@ var (
 	NenTypes   = []string{"enhancement", "transmutation", "conjuration", "emission", "manipulation", "specialization"}
 	ArcSlugs   = []string{"hunter-exam", "zoldyck-family", "heavens-arena", "yorknew-city", "greed-island", "chimera-ant", "chairman-election"}
 	Ranks      = []string{"S", "A", "B", "C"}
-	CharStatus = []string{"pending", "requested", "accepted", "rejected"}
-	Verdicts   = []string{"pending", "accepted", "rejected"} // what a reviewer sets; "requested" comes only from a request
+	CharStatus = []string{"pending", "accepted", "rejected"}
+	Verdicts   = CharStatus // what a reviewer sets; requests are a count, not a state (Andrew, 2026-09-21)
 	ImgStatus  = []string{"kept", "rejected"}
 )
 
@@ -85,34 +85,36 @@ var (
 )
 
 type Char struct {
-	ID            int64          `json:"id"`
-	CardNumber    int            `json:"card_number"` // the binder position; not unique on purpose (Andrew, 2026-09-21)
-	Name          string         `json:"name"`
-	NameJA        string         `json:"name_ja"`
-	First         string         `json:"first"`
-	Rank          string         `json:"rank"`
-	NenTypes      []string       `json:"nen_types"`
-	Affiliation   string         `json:"affiliation"`
-	Arcs          []string       `json:"arcs"`
-	Arms          []string       `json:"arms"`
-	Description   string         `json:"description"`
-	CardDesc      string         `json:"card_description"`
-	Notes         string         `json:"notes"`
-	Version       int            `json:"version"`
-	ReviewStatus  string         `json:"review_status"`
-	ReviewReason  string         `json:"review_reason"`
-	AvatarImageID *int64         `json:"avatar_image_id"`
-	CardImageID   *int64         `json:"card_image_id"`
-	Owner         string         `json:"owner"`
-	CreatedAt     time.Time      `json:"created_at"`
-	UpdatedAt     time.Time      `json:"updated_at"`
-	ImageCount    int            `json:"image_count"`
-	ImageCounts   map[string]int `json:"image_counts"` // per type, for the list's Pics column
-	Images        []Image        `json:"images,omitempty"`
-	Reviews       []Review       `json:"reviews,omitempty"`
-	Requests      []Request      `json:"requests,omitempty"`
-	Baseline      *Baseline      `json:"baseline"` // the last human verdict, or null
-	Changes       []Change       `json:"changes"`  // what changed above the baseline (always present)
+	ID              int64          `json:"id"`
+	CardNumber      int            `json:"card_number"` // the binder position; not unique on purpose (Andrew, 2026-09-21)
+	Name            string         `json:"name"`
+	NameJA          string         `json:"name_ja"`
+	First           string         `json:"first"`
+	Rank            string         `json:"rank"`
+	NenTypes        []string       `json:"nen_types"`
+	Affiliation     string         `json:"affiliation"`
+	Arcs            []string       `json:"arcs"`
+	Arms            []string       `json:"arms"`
+	Description     string         `json:"description"`
+	CardDesc        string         `json:"card_description"`
+	Notes           string         `json:"notes"`
+	Version         int            `json:"version"`
+	AcceptedVersion *int           `json:"accepted_version"` // the version the Binder shows; nil = never accepted
+	OpenRequests    int            `json:"open_requests"`
+	ReviewStatus    string         `json:"review_status"`
+	ReviewReason    string         `json:"review_reason"`
+	AvatarImageID   *int64         `json:"avatar_image_id"`
+	CardImageID     *int64         `json:"card_image_id"`
+	Owner           string         `json:"owner"`
+	CreatedAt       time.Time      `json:"created_at"`
+	UpdatedAt       time.Time      `json:"updated_at"`
+	ImageCount      int            `json:"image_count"`
+	ImageCounts     map[string]int `json:"image_counts"` // per type, for the list's Pics column
+	Images          []Image        `json:"images,omitempty"`
+	Reviews         []Review       `json:"reviews,omitempty"`
+	Requests        []Request      `json:"requests,omitempty"`
+	Baseline        *Baseline      `json:"baseline"` // the last human verdict, or null
+	Changes         []Change       `json:"changes"`  // what changed above the baseline (always present)
 }
 
 // Baseline is the last human verdict: the version the reviewer judged.
@@ -407,6 +409,7 @@ func isUnique(err error) bool {
 
 const charCols = `c.id, c.card_number, c.name, c.name_ja, c.first, c.rank, c.nen_types, c.affiliation, c.arcs, c.arms,
 	c.description, c.card_description, c.notes, c.version, c.review_status, c.review_reason, c.avatar_image_id, c.card_image_id, c.owner, c.created_at, c.updated_at,
+	c.accepted_version, (SELECT count(*) FROM hxh_char_request q WHERE q.char_id = c.id AND q.status = 'open'),
 	(SELECT count(*) FROM hxh_char_image i WHERE i.char_id = c.id),
 	COALESCE((SELECT json_object_agg(t.type, t.n) FROM (SELECT type, count(*) AS n FROM hxh_char_image i WHERE i.char_id = c.id GROUP BY type) t), '{}'::json)`
 
@@ -416,7 +419,7 @@ func scanChar(row pgx.Row) (*Char, error) {
 	var counts []byte
 	if err := row.Scan(&c.ID, &c.CardNumber, &c.Name, &c.NameJA, &c.First, &c.Rank, &nen, &c.Affiliation, &arcs, &arms,
 		&c.Description, &c.CardDesc, &c.Notes, &c.Version, &c.ReviewStatus, &c.ReviewReason, &c.AvatarImageID, &c.CardImageID, &c.Owner, &c.CreatedAt, &c.UpdatedAt,
-		&c.ImageCount, &counts); err != nil {
+		&c.AcceptedVersion, &c.OpenRequests, &c.ImageCount, &counts); err != nil {
 		return nil, err
 	}
 	c.NenTypes, c.Arcs, c.Arms = splitSlugs(nen), splitSlugs(arcs), splitSlugs(arms)
@@ -564,12 +567,18 @@ func (s *Store) changed(ctx context.Context, charID int64, by string, bot bool, 
 			return err
 		}
 	}
-	if bot && (status == "accepted" || status == "rejected") {
+	switch {
+	case bot && (status == "accepted" || status == "rejected"):
 		if _, err := tx.Exec(ctx, `UPDATE hxh_char SET review_status = 'pending', review_reason = '' WHERE id = $1`, charID); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO hxh_char_review (char_id, version, status, reason, owner) VALUES ($1, $2, 'pending', $3, $4)`,
 			charID, version, summarize(rows), by); err != nil {
+			return err
+		}
+	case !bot && status == "accepted":
+		// self-approved: the accepted card follows a person's edit at once
+		if _, err := tx.Exec(ctx, `UPDATE hxh_char SET accepted_version = version, accepted_snapshot = `+snapshotExpr+` WHERE id = $1`, charID); err != nil {
 			return err
 		}
 	}
@@ -635,11 +644,29 @@ func diffChar(before, after *Char) []Change {
 	return out
 }
 
+// snapshotExpr is the accepted card as JSON, built from the row itself
+// so Accept and a person's edit write the same shape (and the 014
+// changeset's backfill matches it). Keys are BinderCard's.
+const snapshotExpr = `jsonb_build_object(
+	'name', name, 'first', first, 'rank', rank,
+	'nen_types', COALESCE(to_jsonb(string_to_array(NULLIF(nen_types, ''), ',')), '[]'::jsonb),
+	'affiliation', affiliation,
+	'arcs', COALESCE(to_jsonb(string_to_array(NULLIF(arcs, ''), ',')), '[]'::jsonb),
+	'arms', COALESCE(to_jsonb(string_to_array(NULLIF(arms, ''), ',')), '[]'::jsonb),
+	'card_description', card_description, 'description', description,
+	'avatar_image_id', avatar_image_id, 'card_image_id', card_image_id)`
+
 // Review records a verdict on the character's current version. A
-// rejection may carry a reason (Andrew, 2026-09-19: optional).
-func (s *Store) Review(id int64, status, reason, owner string) (*Char, error) {
+// rejection may carry a reason (Andrew, 2026-09-19: optional). Accept
+// moves accepted_version to this version and snapshots the card the
+// Binder will print; requests are untouched by any verdict. A bot
+// never passes a verdict (Andrew, 2026-09-21).
+func (s *Store) Review(id int64, status, reason, owner string, bot bool) (*Char, error) {
 	if !in(Verdicts, status) {
 		return nil, fmt.Errorf("%w: status must be pending, accepted or rejected", ErrBadInput)
+	}
+	if bot {
+		return nil, fmt.Errorf("%w: a bot cannot pass a verdict", ErrBadInput)
 	}
 	reason = strings.TrimSpace(reason)
 	if status != "rejected" {
@@ -653,7 +680,11 @@ func (s *Store) Review(id int64, status, reason, owner string) (*Char, error) {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	var version int
-	err = tx.QueryRow(ctx, `UPDATE hxh_char SET review_status = $2, review_reason = $3 WHERE id = $1 RETURNING version`, id, status, reason).Scan(&version)
+	q := `UPDATE hxh_char SET review_status = $2, review_reason = $3 WHERE id = $1 RETURNING version`
+	if status == "accepted" {
+		q = `UPDATE hxh_char SET review_status = $2, review_reason = $3, accepted_version = version, accepted_snapshot = ` + snapshotExpr + ` WHERE id = $1 RETURNING version`
+	}
+	err = tx.QueryRow(ctx, q, id, status, reason).Scan(&version)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -662,11 +693,6 @@ func (s *Store) Review(id int64, status, reason, owner string) (*Char, error) {
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO hxh_char_review (char_id, version, status, reason, owner) VALUES ($1, $2, $3, $4, $5)`,
 		id, version, status, reason, owner); err != nil {
-		return nil, err
-	}
-	// a reviewer's own verdict overrides whatever they had asked the bot for
-	if _, err := tx.Exec(ctx, `UPDATE hxh_char_request SET status = 'withdrawn', resolved_by = $2, resolved_at = NOW()
-		WHERE char_id = $1 AND status = 'open'`, id, owner); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -681,9 +707,11 @@ func (s *Store) Review(id int64, status, reason, owner string) (*Char, error) {
 // 2026-09-21: "Extend picture", "Card description", more later). Slugs
 // live in hxh_request_kind so a new kind is a changeset, not a release.
 type RequestKind struct {
-	Slug  string `json:"slug"`
-	Label string `json:"label"`
-	Sort  int    `json:"sort"`
+	Slug      string `json:"slug"`
+	Label     string `json:"label"`
+	Sort      int    `json:"sort"`
+	Scope     string `json:"scope"`      // character | image | any
+	NeedsText bool   `json:"needs_text"` // "Other…": the details are the request
 }
 
 // Request is one ask: a kind, free text, and its state — open until the
@@ -703,19 +731,20 @@ type Request struct {
 	CreatedAt  time.Time  `json:"created_at"`
 	ResolvedBy string     `json:"resolved_by"`
 	ResolvedAt *time.Time `json:"resolved_at"`
+	ImageID    *int64     `json:"image_id"` // set for a request on one picture
 }
 
-const requestCols = `q.id, q.char_id, q.kind, k.label, q.text, q.status, q.version, q.owner, q.created_at, q.resolved_by, q.resolved_at`
+const requestCols = `q.id, q.char_id, q.kind, k.label, q.text, q.status, q.version, q.owner, q.created_at, q.resolved_by, q.resolved_at, q.image_id`
 const requestFrom = ` FROM hxh_char_request q JOIN hxh_request_kind k ON k.slug = q.kind `
 
 func scanRequest(row pgx.Row, q *Request) error {
-	return row.Scan(&q.ID, &q.CharID, &q.Kind, &q.Label, &q.Text, &q.Status, &q.Version, &q.Owner, &q.CreatedAt, &q.ResolvedBy, &q.ResolvedAt)
+	return row.Scan(&q.ID, &q.CharID, &q.Kind, &q.Label, &q.Text, &q.Status, &q.Version, &q.Owner, &q.CreatedAt, &q.ResolvedBy, &q.ResolvedAt, &q.ImageID)
 }
 
 func (s *Store) RequestKinds() ([]RequestKind, error) {
 	ctx, cancel := withCtx()
 	defer cancel()
-	rows, err := s.pool.Query(ctx, `SELECT slug, label, sort FROM hxh_request_kind ORDER BY sort, slug`)
+	rows, err := s.pool.Query(ctx, `SELECT slug, label, sort, scope, needs_text FROM hxh_request_kind ORDER BY sort, slug`)
 	if err != nil {
 		return nil, err
 	}
@@ -723,7 +752,7 @@ func (s *Store) RequestKinds() ([]RequestKind, error) {
 	out := []RequestKind{}
 	for rows.Next() {
 		var k RequestKind
-		if err := rows.Scan(&k.Slug, &k.Label, &k.Sort); err != nil {
+		if err := rows.Scan(&k.Slug, &k.Label, &k.Sort, &k.Scope, &k.NeedsText); err != nil {
 			return nil, err
 		}
 		out = append(out, k)
@@ -733,17 +762,37 @@ func (s *Store) RequestKinds() ([]RequestKind, error) {
 
 // Request files an ask against the character's current version and
 // marks the character "requested" until the bot resolves it.
-func (s *Store) Request(charID int64, kind, text, owner string) (*Char, error) {
+func (s *Store) Request(charID int64, kind, text string, imageID *int64, owner string) (*Char, error) {
 	kind, text = strings.TrimSpace(kind), strings.TrimSpace(text)
 	ctx, cancel := withCtx()
 	defer cancel()
-	var label string
-	err := s.pool.QueryRow(ctx, `SELECT label FROM hxh_request_kind WHERE slug = $1`, kind).Scan(&label)
+	var label, scope string
+	var needsText bool
+	err := s.pool.QueryRow(ctx, `SELECT label, scope, needs_text FROM hxh_request_kind WHERE slug = $1`, kind).Scan(&label, &scope, &needsText)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("%w: unknown request kind %q", ErrBadInput, kind)
 	}
 	if err != nil {
 		return nil, err
+	}
+	want := "character"
+	if imageID != nil {
+		want = "image"
+	}
+	if scope != "any" && scope != want {
+		return nil, fmt.Errorf("%w: %s is not a %s request", ErrBadInput, label, want)
+	}
+	if needsText && text == "" {
+		return nil, fmt.Errorf("%w: %s needs details", ErrBadInput, label)
+	}
+	if imageID != nil {
+		var n int
+		if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM hxh_char_image WHERE id = $1 AND char_id = $2`, *imageID, charID).Scan(&n); err != nil {
+			return nil, err
+		}
+		if n == 0 {
+			return nil, fmt.Errorf("%w: picture %d is not this character's", ErrBadInput, *imageID)
+		}
 	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -751,18 +800,17 @@ func (s *Store) Request(charID int64, kind, text, owner string) (*Char, error) {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	var version int
-	err = tx.QueryRow(ctx, `UPDATE hxh_char SET review_status = 'requested', review_reason = '' WHERE id = $1 RETURNING version`, charID).Scan(&version)
+	err = tx.QueryRow(ctx, `SELECT version FROM hxh_char WHERE id = $1`, charID).Scan(&version)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO hxh_char_request (char_id, kind, text, version, owner) VALUES ($1, $2, $3, $4, $5)`,
-		charID, kind, text, version, owner); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO hxh_char_request (char_id, kind, text, version, owner, image_id) VALUES ($1, $2, $3, $4, $5, $6)`,
+		charID, kind, text, version, owner, imageID); err != nil {
 		return nil, err
 	}
-	_ = label
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
@@ -782,7 +830,7 @@ func (s *Store) ListRequests(status string) ([]Request, error) {
 	out := []Request{}
 	for rows.Next() {
 		var q Request
-		if err := rows.Scan(&q.ID, &q.CharID, &q.Kind, &q.Label, &q.Text, &q.Status, &q.Version, &q.Owner, &q.CreatedAt, &q.ResolvedBy, &q.ResolvedAt, &q.CharName); err != nil {
+		if err := rows.Scan(&q.ID, &q.CharID, &q.Kind, &q.Label, &q.Text, &q.Status, &q.Version, &q.Owner, &q.CreatedAt, &q.ResolvedBy, &q.ResolvedAt, &q.ImageID, &q.CharName); err != nil {
 			return nil, err
 		}
 		out = append(out, q)
@@ -812,15 +860,6 @@ func (s *Store) ResolveRequest(id int64, by string) (*Request, error) {
 	}
 	if err != nil {
 		return nil, err
-	}
-	var open int
-	if err := tx.QueryRow(ctx, `SELECT count(*) FROM hxh_char_request WHERE char_id = $1 AND status = 'open'`, charID).Scan(&open); err != nil {
-		return nil, err
-	}
-	if open == 0 {
-		if _, err := tx.Exec(ctx, `UPDATE hxh_char SET review_status = 'pending' WHERE id = $1 AND review_status = 'requested'`, charID); err != nil {
-			return nil, err
-		}
 	}
 	var q Request
 	if err := scanRequest(tx.QueryRow(ctx, `SELECT `+requestCols+requestFrom+`WHERE q.id = $1`, id), &q); err != nil {
@@ -863,7 +902,7 @@ func validateCharValues(c *Char) error {
 		return fmt.Errorf("%w: rank must be S, A, B or C", ErrBadInput)
 	}
 	if !in(CharStatus, c.ReviewStatus) {
-		return fmt.Errorf("%w: review_status must be pending, requested, accepted or rejected", ErrBadInput)
+		return fmt.Errorf("%w: review_status must be pending, accepted or rejected", ErrBadInput)
 	}
 	if err := validSlugList(c.NenTypes, NenTypes, 2); err != nil {
 		return fmt.Errorf("nen_types %w", err)
@@ -1135,12 +1174,32 @@ func (s *Store) UpdateImage(id int64, status, caption *string, by string, bot bo
 func (s *Store) DeleteImage(id int64, by string, bot bool) error {
 	ctx, cancel := withCtx()
 	defer cancel()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var used int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM hxh_char WHERE (accepted_snapshot->>'avatar_image_id')::bigint = $1 OR (accepted_snapshot->>'card_image_id')::bigint = $1`, id).Scan(&used); err != nil {
+		return err
+	}
+	if used > 0 {
+		return fmt.Errorf("%w: picture %d is on the accepted card; accept another picture first", ErrConflict, id)
+	}
 	var charID int64
-	err := s.pool.QueryRow(ctx, `DELETE FROM hxh_char_image WHERE id = $1 RETURNING char_id`, id).Scan(&charID)
+	err = tx.QueryRow(ctx, `DELETE FROM hxh_char_image WHERE id = $1 RETURNING char_id`, id).Scan(&charID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
 	if err != nil {
+		return err
+	}
+	// a request on a picture that is gone is moot: withdrawn, in the deleter's name
+	if _, err := tx.Exec(ctx, `UPDATE hxh_char_request SET status = 'withdrawn', resolved_by = $2, resolved_at = NOW()
+		WHERE image_id = $1 AND status = 'open'`, id, by); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
 	return s.changed(ctx, charID, by, bot, []Change{{Kind: "image", Action: "removed", ImageID: &id}})
@@ -1236,9 +1295,9 @@ func fail(w http.ResponseWriter, err error, what string) {
 	case errors.Is(err, ErrNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 	case errors.Is(err, ErrConflict):
-		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		writeJSON(w, http.StatusConflict, map[string]string{"error": strings.TrimPrefix(err.Error(), ErrConflict.Error()+": ")})
 	case errors.Is(err, ErrBadInput):
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": strings.TrimPrefix(err.Error(), ErrBadInput.Error()+": ")})
 	default:
 		log.Printf("[hxh db] %s: %v", what, err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
@@ -1295,20 +1354,50 @@ type BinderCard struct {
 	Version       int      `json:"version"`
 }
 
+// Binder is what the party sees: every accepted snapshot that has both
+// pictures, in card-number order. The live row does not matter here —
+// a bot's edit shows nowhere until a reviewer accepts it.
+func (s *Store) Binder() ([]BinderCard, error) {
+	ctx, cancel := withCtx()
+	defer cancel()
+	rows, err := s.pool.Query(ctx, `SELECT id, card_number, accepted_version, accepted_snapshot FROM hxh_char
+		WHERE accepted_snapshot IS NOT NULL ORDER BY card_number, id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []BinderCard{}
+	for rows.Next() {
+		var card BinderCard
+		var snap []byte
+		var accepted int
+		if err := rows.Scan(&card.ID, &card.CardNumber, &accepted, &snap); err != nil {
+			return nil, err
+		}
+		id, no := card.ID, card.CardNumber
+		if err := json.Unmarshal(snap, &card); err != nil {
+			return nil, fmt.Errorf("snapshot of character %d: %w", id, err)
+		}
+		card.ID, card.CardNumber, card.Version = id, no, accepted
+		if card.AvatarImageID == nil || card.CardImageID == nil { // a card needs both pictures (Andrew, 2026-09-21)
+			continue
+		}
+		for _, p := range []*[]string{&card.NenTypes, &card.Arcs, &card.Arms} {
+			if *p == nil {
+				*p = []string{}
+			}
+		}
+		out = append(out, card)
+	}
+	return out, rows.Err()
+}
+
 func handleBinder(store *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		chars, err := store.ListChars("accepted", "")
+		out, err := store.Binder()
 		if err != nil {
 			fail(w, err, "binder")
 			return
-		}
-		out := make([]BinderCard, 0, len(chars))
-		for _, c := range chars {
-			if c.AvatarImageID == nil || c.CardImageID == nil { // a card needs both pictures (Andrew, 2026-09-21)
-				continue
-			}
-			out = append(out, BinderCard{ID: c.ID, CardNumber: c.CardNumber, Name: c.Name, First: c.First, Rank: c.Rank, NenTypes: c.NenTypes, Affiliation: c.Affiliation,
-				Arcs: c.Arcs, Arms: c.Arms, CardDesc: c.CardDesc, Description: c.Description, AvatarImageID: c.AvatarImageID, CardImageID: c.CardImageID, Version: c.Version})
 		}
 		writeJSON(w, http.StatusOK, out)
 	}
@@ -1465,14 +1554,15 @@ func handleRequest(store *Store) http.HandlerFunc {
 			return
 		}
 		var body struct {
-			Kind string `json:"kind"`
-			Text string `json:"text"`
+			Kind    string `json:"kind"`
+			Text    string `json:"text"`
+			ImageID *int64 `json:"image_id"`
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body); err != nil {
 			fail(w, fmt.Errorf("%w: bad json", ErrBadInput), "request")
 			return
 		}
-		c, err := store.Request(id, body.Kind, body.Text, userOf(r))
+		c, err := store.Request(id, body.Kind, body.Text, body.ImageID, userOf(r))
 		if err != nil {
 			fail(w, err, "request")
 			return
@@ -1588,7 +1678,7 @@ func handleReview(store *Store) http.HandlerFunc {
 			fail(w, fmt.Errorf("%w: bad json", ErrBadInput), "review")
 			return
 		}
-		c, err := store.Review(id, body.Status, body.Reason, userOf(r))
+		c, err := store.Review(id, body.Status, body.Reason, userOf(r), botOf(r))
 		if err != nil {
 			fail(w, err, "review")
 			return
