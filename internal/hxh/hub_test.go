@@ -193,24 +193,27 @@ func TestRooms(t *testing.T) {
 func TestPresenceState(t *testing.T) {
 	now := time.Now()
 	m := member("x", true)
-	if presenceState(m, true, now) != "online" {
-		t.Error("connected → online")
+	if presenceState(m, true, now) != "away" {
+		t.Error("an instance open but never a focus → away, not online")
 	}
 	if presenceState(m, false, now) != "offline" {
-		t.Error("never seen → offline")
+		t.Error("never seen, nothing open → offline")
 	}
 	at := now.Add(-30 * time.Second)
 	m.LastSeenAt = &at
-	if presenceState(m, false, now) != "online" {
-		t.Error("< 1 min → online")
+	if presenceState(m, false, now) != "online" || presenceState(m, true, now) != "online" {
+		t.Error("focus < 1 min → online, open or not")
 	}
 	at = now.Add(-30 * time.Minute)
 	if presenceState(m, false, now) != "away" {
-		t.Error("< 1 h → away")
+		t.Error("focus < 1 h → away")
 	}
 	at = now.Add(-2 * time.Hour)
 	if presenceState(m, false, now) != "offline" {
-		t.Error("> 1 h → offline")
+		t.Error("focus > 1 h, nothing open → offline")
+	}
+	if presenceState(m, true, now) != "away" {
+		t.Error("focus > 1 h but an instance open (a background tab) → away")
 	}
 	m.HasPassword = false
 	if presenceState(m, true, now) != "nopass" {
@@ -219,7 +222,7 @@ func TestPresenceState(t *testing.T) {
 }
 
 func TestHelloAndPresence(t *testing.T) {
-	h, _, members, _ := newTestHub()
+	h, _, members, now := newTestHub()
 	andrew := h.add("andrew")
 	hello := next(t, andrew)
 	if hello["t"] != "hello" || hello["me"] != "andrew" {
@@ -234,27 +237,42 @@ func TestHelloAndPresence(t *testing.T) {
 		m := c.(map[string]any)
 		states[m["username"].(string)] = m["state"].(string)
 	}
-	if states["andrew"] != "online" || states["abi"] != "offline" || states["newbie"] != "nopass" {
+	if states["andrew"] != "away" || states["abi"] != "offline" || states["newbie"] != "nopass" {
 		t.Fatalf("states %v", states)
 	}
-	// andrew's own connect announced him online (to himself too — he is connected)
+	// andrew's own connect announced him AWAY (an instance is open; nobody has focused yet) — to himself too
 	p := next(t, andrew)
-	if p["t"] != "presence" || p["user"] != "andrew" || p["state"] != "online" {
-		t.Fatalf("want presence online, got %v", p)
+	if p["t"] != "presence" || p["user"] != "andrew" || p["state"] != "away" {
+		t.Fatalf("want presence away, got %v", p)
 	}
-	if len(members.touched) == 0 || members.touched[0] != "andrew" {
-		t.Error("connect must touch last_seen")
+	if len(members.touched) != 0 {
+		t.Error("a socket is not a person: connecting touches nothing")
 	}
-	// abi connects: andrew hears it
+	// a focused tab's heartbeat is: online
+	frame(andrew, map[string]any{"t": "ping", "focus": true})
+	next(t, andrew) // pong
+	if len(members.touched) != 1 || members.touched[0] != "andrew" {
+		t.Fatalf("a focused ping touches last_seen, got %v", members.touched)
+	}
+	frame(andrew, map[string]any{"t": "ping"})
+	next(t, andrew) // pong
+	if len(members.touched) != 1 {
+		t.Error("an unfocused ping (a background tab) touches nothing")
+	}
+	// abi connects: andrew hears it — away, an instance open
 	abi := h.add("abi")
 	next(t, abi) // hello
 	p = next(t, andrew)
-	if p["user"] != "abi" || p["state"] != "online" {
-		t.Fatalf("andrew should hear abi online, got %v", p)
+	if p["user"] != "abi" || p["state"] != "away" {
+		t.Fatalf("andrew should hear abi away, got %v", p)
 	}
 	next(t, abi) // abi's own presence
-	// abi hangs up with no recent activity: offline
+	// abi hangs up: within the grace nothing changes (a reconnecting tab must not flap)…
 	h.remove(abi)
+	none(t, andrew)
+	// …then, with no focus in the last hour, offline
+	*now = now.Add(GoneGrace + time.Second)
+	h.refreshPresence()
 	p = next(t, andrew)
 	if p["user"] != "abi" || p["state"] != "offline" {
 		t.Fatalf("want abi offline, got %v", p)
@@ -405,7 +423,7 @@ func TestDMNeedsAReachablePartner(t *testing.T) {
 	if e := say(); e["code"] != "offline" {
 		t.Fatalf("offline again, got %v", e)
 	}
-	abi := h.add("abi") // connected: online at once, before any refresh
+	abi := h.add("abi") // connected: an instance open — reachable at once, before any refresh
 	drain(andrew, abi)
 	if m := say(); m["t"] != "msg" {
 		t.Fatalf("connected partner reachable, got %v", m)
@@ -569,8 +587,15 @@ func TestPingPongAndBadFrames(t *testing.T) {
 	if next(t, andrew)["t"] != "pong" {
 		t.Fatal("ping → pong")
 	}
-	if members.touched[len(members.touched)-1] != "andrew" {
-		t.Error("ping must count as activity")
+	if len(members.touched) != 0 {
+		t.Error("a bare ping (a background tab) is not a person")
+	}
+	h.handle(andrew, []byte(`{"t":"ping","focus":true}`))
+	if next(t, andrew)["t"] != "pong" {
+		t.Fatal("ping → pong")
+	}
+	if len(members.touched) != 1 || members.touched[0] != "andrew" {
+		t.Error("a focused ping counts as activity")
 	}
 	h.handle(andrew, []byte(`not json`))
 	if next(t, andrew)["code"] != "bad" {

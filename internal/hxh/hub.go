@@ -6,7 +6,7 @@
 //
 //	client → server  {"t":"msg","room":R,"body":S,"image_id":N?}  {"t":"typing","room":R}
 //	                 {"t":"read","room":R,"id":N}  (the focused tab showed R up to message N)
-//	                 {"t":"ping"}
+//	                 {"t":"ping","focus":true?}  (focus: this tab is the one being looked at)
 //	server → client  {"t":"hello","me":U,"contacts":[…],"unread":[{room,count,last_id}…]}
 //	                 {"t":"msg","msg":{id,room,sender,body,created_at,image?:{id,width,height}}}
 //	                 {"t":"typing","room":R,"user":U}
@@ -19,9 +19,16 @@
 // a DM to someone neither online nor away is refused (Andrew,
 // 2026-09-19: "you can message online and away people, but not offline").
 //
-// Presence tiers (spec item 16): online = a live connection or activity
-// in the last minute, away = last hour, offline otherwise, nopass = the
-// account has no password yet.
+// Presence tiers (spec item 16, reworked 2026-09-21 — Andrew: an instance
+// open in a background tab must stay AWAY, never offline, and must not
+// look online either). Two signals: FOCUS (a person there: a focused
+// tab's ping, a message, typing, a read marker, any authed page request)
+// and KEEPALIVE (an instance open: a live socket, or one that dropped
+// less than GoneGrace ago — reconnects and throttled tabs must not flap).
+//
+//	online  = focus in the last minute
+//	away    = focus in the last hour, OR an instance open
+//	offline = otherwise;  nopass = the account has no password yet.
 package hxh
 
 import (
@@ -70,21 +77,25 @@ type Contact struct {
 	LastSeenAt  *time.Time `json:"last_seen_at"`
 }
 
-func presenceState(m shared.Member, connected bool, now time.Time) string {
+// GoneGrace: how long after its last socket closed an instance still counts
+// as open (a reconnecting or throttled tab must not flap away/offline).
+const GoneGrace = 2 * time.Minute
+
+// presenceState: `open` = an instance is open (see the tiers above).
+func presenceState(m shared.Member, open bool, now time.Time) string {
 	if !m.HasPassword {
 		return "nopass"
 	}
-	if connected {
-		return "online"
+	if m.LastSeenAt != nil {
+		d := now.Sub(*m.LastSeenAt)
+		if d < time.Minute {
+			return "online"
+		}
+		if d < time.Hour {
+			return "away"
+		}
 	}
-	if m.LastSeenAt == nil {
-		return "offline"
-	}
-	d := now.Sub(*m.LastSeenAt)
-	switch {
-	case d < time.Minute:
-		return "online"
-	case d < time.Hour:
+	if open {
 		return "away"
 	}
 	return "offline"
@@ -146,7 +157,8 @@ type Hub struct {
 	members memberSource
 	clients map[*hubClient]struct{}
 	byUser  map[string]map[*hubClient]struct{}
-	states  map[string]string // last presence BROADCAST per user (snapshots never write it)
+	states  map[string]string    // last presence BROADCAST per user (snapshots never write it)
+	gone    map[string]time.Time // when a user's LAST socket closed (keepalive grace)
 	now     func() time.Time
 	// OnMessage, when set, is called (in its own goroutine) for every
 	// message the hub stores — the bot service listens here.
@@ -159,6 +171,7 @@ func NewHub(store chatStore, members memberSource) *Hub {
 		clients: map[*hubClient]struct{}{},
 		byUser:  map[string]map[*hubClient]struct{}{},
 		states:  map[string]string{},
+		gone:    map[string]time.Time{},
 		now:     func() time.Time { return time.Now().UTC() },
 	}
 }
@@ -182,6 +195,18 @@ func (h *Hub) connected(user string) bool {
 	return len(h.byUser[user]) > 0
 }
 
+// open: is an instance of the user's open — a live socket, or one that
+// closed less than GoneGrace ago? Call with h.mu held.
+func (h *Hub) open(user string, now time.Time) bool {
+	if h.connected(user) {
+		return true
+	}
+	if t, ok := h.gone[user]; ok && now.Sub(t) < GoneGrace {
+		return true
+	}
+	return false
+}
+
 // Contacts lists every member with its current presence.
 func (h *Hub) Contacts() ([]Contact, error) {
 	members, err := h.members.ListMembers()
@@ -198,7 +223,7 @@ func (h *Hub) contactsOf(members []shared.Member) []Contact {
 	now := h.now()
 	out := make([]Contact, 0, len(members))
 	for _, m := range members {
-		state := presenceState(m, h.connected(m.Username), now)
+		state := presenceState(m, h.open(m.Username, now), now)
 		out = append(out, Contact{Username: m.Username, DisplayName: m.DisplayName, Initial: m.Initial, Color: m.Color, State: state, IsBot: m.IsBot, LastSeenAt: m.LastSeenAt})
 	}
 	return out
@@ -213,7 +238,7 @@ func (h *Hub) contactsOf(members []shared.Member) []Contact {
 func (h *Hub) reachable(user string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.connected(user) {
+	if h.open(user, h.now()) {
 		return true
 	}
 	st := h.states[user]
@@ -249,7 +274,7 @@ func (h *Hub) refreshPresence() {
 	}
 	var changes []change
 	for _, m := range members {
-		state := presenceState(m, h.connected(m.Username), now)
+		state := presenceState(m, h.open(m.Username, now), now)
 		prev, known := h.states[m.Username]
 		if !known {
 			prev = baseline(state)
@@ -276,7 +301,7 @@ func (h *Hub) announce(user string) {
 			continue
 		}
 		h.mu.Lock()
-		state := presenceState(m, h.connected(user), h.now())
+		state := presenceState(m, h.open(user, h.now()), h.now())
 		prev, known := h.states[user]
 		if !known {
 			prev = baseline(state)
@@ -303,7 +328,7 @@ func (h *Hub) add(user string) *hubClient {
 	}
 	h.byUser[user][c] = struct{}{}
 	h.mu.Unlock()
-	h.members.TouchLastSeen(user)
+	// a socket is an instance, not a person: connecting touches nothing (a page load already did, over HTTP)
 	members, err := h.members.ListMembers()
 	if err != nil {
 		log.Printf("[hxh chat] hello members error: %v", err)
@@ -338,6 +363,7 @@ func (h *Hub) remove(c *hubClient) {
 		delete(set, c)
 		if len(set) == 0 {
 			delete(h.byUser, c.user)
+			h.gone[c.user] = h.now()
 		}
 	}
 	h.mu.Unlock()
@@ -417,6 +443,7 @@ type inFrame struct {
 	Body    string `json:"body"`
 	ID      int64  `json:"id"`
 	ImageID int64  `json:"image_id"` // msg: a picture uploaded by this user, not yet on a message
+	Focus   bool   `json:"focus"`    // ping: the sending tab is focused and visible — a person is there
 }
 
 func (c *hubClient) fail(code, room string) {
@@ -432,13 +459,16 @@ func (h *Hub) handle(c *hubClient, data []byte) {
 	}
 	switch f.T {
 	case "ping":
-		h.members.TouchLastSeen(c.user)
+		if f.Focus { // only a looked-at tab's heartbeat is a sign of a person
+			h.members.TouchLastSeen(c.user)
+		}
 		c.sendJSON(map[string]any{"t": "pong"})
 	case "typing":
 		if !canUseRoom(c.user, f.Room) {
 			c.fail("room", f.Room)
 			return
 		}
+		h.members.TouchLastSeen(c.user)
 		h.broadcastRoom(f.Room, map[string]any{"t": "typing", "room": f.Room, "user": c.user}, c.user)
 	case "read":
 		// the focused tab's active window showed the room up to message ID
@@ -446,6 +476,7 @@ func (h *Hub) handle(c *hubClient, data []byte) {
 			c.fail("room", f.Room)
 			return
 		}
+		h.members.TouchLastSeen(c.user)
 		if f.ID <= 0 {
 			c.fail("bad", f.Room)
 			return
@@ -465,6 +496,7 @@ func (h *Hub) handle(c *hubClient, data []byte) {
 			c.fail("offline", f.Room)
 			return
 		}
+		h.members.TouchLastSeen(c.user)
 		body := strings.TrimSpace(f.Body)
 		if (body == "" && f.ImageID <= 0) || utf8.RuneCountInString(body) > MaxBody {
 			c.fail("body", f.Room)
