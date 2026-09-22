@@ -1,0 +1,28 @@
+# Local e2e stack: docker postgres `hobby-test-pg` on :5434 (dbs hobby_server_test + hxh_test, migrated with
+# the hobby-liquibase image — see AGENTS.md), this server on :5099. The site harness is feathers
+# foundry/website/scripts/preview.mjs (PROXY=http://127.0.0.1:5099). Users andrew/abi/gon/killua/kurapika,
+# password hunterhunter; leorio has none. Rebuilt 2026-09-22 after a reboot wiped the scratchpad copy.
+server:
+  port: 5099
+  env: "development"
+
+projects:
+  - name: admin
+    database:
+      host: "127.0.0.1"
+      port: 5434
+      name: "hobby_server_test"
+      user: "postgres"
+      password: "devpass"
+    url_prefix: "/api/admin"
+    cookie_path: "/"
+
+  - name: hxh
+    database:
+      host: "127.0.0.1"
+      port: 5434
+      name: "hxh_test"
+      user: "postgres"
+      password: "devpass"
+    url_prefix: "/api/hxh"
+    cookie_path: "/hxh/"
