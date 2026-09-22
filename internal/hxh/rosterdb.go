@@ -990,7 +990,7 @@ func validateCharValues(c *Char) error {
 			return fmt.Errorf("%w: arms must be kebab slugs, got %q", ErrBadInput, a)
 		}
 	}
-	if len(c.First) > 20 || len(c.NameJA) > 100 || len(c.Affiliation) > 60 || len(c.Name) > 100 {
+	if len(c.First) > 60 || len(c.NameJA) > 100 || len(c.Affiliation) > 60 || len(c.Name) > 100 { // first: no short cap — the card plaque shrinks a long name (Andrew, 2026-09-22)
 		return fmt.Errorf("%w: field too long", ErrBadInput)
 	}
 	return nil
