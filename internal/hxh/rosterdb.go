@@ -1497,6 +1497,34 @@ func (s *Store) Binder() ([]BinderCard, error) {
 
 var StampKinds = []string{"heart", "bookmark", "claim"}
 
+// ClaimOverrides is what a claim changes about a member on this site: the
+// accepted card's short name and avatar picture (the member's colour is
+// their own and stays). Keyed by username.
+func (s *Store) ClaimOverrides() (map[string]Override, error) {
+	ctx, cancel := withCtx()
+	defer cancel()
+	rows, err := s.pool.Query(ctx, `SELECT st.username, COALESCE(c.accepted_snapshot->>'first', c.first), c.accepted_snapshot->>'avatar_image_id'
+		FROM hxh_stamp st JOIN hxh_char c ON c.id = st.char_id WHERE st.kind = 'claim'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]Override{}
+	for rows.Next() {
+		var user, first string
+		var avatar *string
+		if err := rows.Scan(&user, &first, &avatar); err != nil {
+			return nil, err
+		}
+		o := Override{Character: first}
+		if avatar != nil && *avatar != "" {
+			o.AvatarURL = "/hxh/api/db/images/" + *avatar + "/thumb"
+		}
+		out[user] = o
+	}
+	return out, rows.Err()
+}
+
 // Claim is a member's name stamped on the card they plan to show up as
 // (Andrew, 2026-09-22): public, named, one per member, one per card.
 type Claim struct {
@@ -1665,6 +1693,9 @@ func handleStamp(store *Store, auth *shared.Store) http.HandlerFunc {
 		if err != nil {
 			fail(w, err, "stamp")
 			return
+		}
+		if body.Kind == "claim" && store.OnClaims != nil {
+			store.OnClaims()
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"on": on, "kind": body.Kind, "char_id": id, "x": body.X, "y": body.Y, "rotation": body.Rotation, "label": label})
 	}

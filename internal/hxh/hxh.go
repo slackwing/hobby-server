@@ -56,6 +56,10 @@ type Character struct {
 
 type Store struct {
 	pool *pgxpool.Pool
+	// OnClaims is called after a claim is made or released (the chat
+	// re-announces its contacts: a claim overrides a member's name and
+	// avatar on this site). Set by NewChat; nil without a chat.
+	OnClaims func()
 }
 
 func NewStore(pool *pgxpool.Pool) *Store {

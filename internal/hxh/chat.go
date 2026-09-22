@@ -362,14 +362,21 @@ type Chat struct {
 }
 
 func NewChat(store *Store, auth *shared.Store) *Chat {
-	return &Chat{store: store, auth: auth, Hub: NewHub(store, hxhMembers{auth})}
+	c := &Chat{store: store, auth: auth, Hub: NewHub(store, hxhMembers{auth, store})}
+	store.OnClaims = c.Hub.AnnounceContacts // a claim made or released: everyone's contact list changes
+	return c
 }
 
-// hxhMembers adapts the shared store to the hub's member source.
-type hxhMembers struct{ auth *shared.Store }
+// hxhMembers adapts the shared store to the hub's member source, and
+// adds hxh's own overrides: a claimed character's short name and avatar.
+type hxhMembers struct {
+	auth  *shared.Store
+	store *Store
+}
 
-func (m hxhMembers) ListMembers() ([]shared.Member, error) { return m.auth.ListMembers(ChatWebsite) }
-func (m hxhMembers) TouchLastSeen(username string)         { m.auth.TouchLastSeen(username) }
+func (m hxhMembers) ListMembers() ([]shared.Member, error)   { return m.auth.ListMembers(ChatWebsite) }
+func (m hxhMembers) TouchLastSeen(username string)           { m.auth.TouchLastSeen(username) }
+func (m hxhMembers) Overrides() (map[string]Override, error) { return m.store.ClaimOverrides() }
 
 type ctxKey int
 

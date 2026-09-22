@@ -181,7 +181,18 @@ state, etc.) as needed.
   me!", one per member (a new claim releases the old) and one per
   card (409 "claimed by NAME" otherwise); the row's `label` is the
   member's display name in capitals as printed on the card; the
-  stamps payload carries `claims` with names (public). `AutoAccepted`
+  stamps payload carries `claims` with names (public). A claim is
+  also the site's OVERRIDE of the shared profile in the chat (Andrew,
+  2026-09-22: "a specific hobby site like hxh can override the default
+  avatar with its own"): `Store.ClaimOverrides()` (claimant → accepted
+  card's short name + `/images/<avatar>/thumb`) feeds `hub.go`'s
+  `overrideSource` (a `memberSource` that also has `Overrides()`;
+  `hxhMembers` in chat.go is one), `contactsOf` decorates each
+  `Contact` with `character` / `avatar_url` (omitted when unclaimed;
+  the colour stays the member's own — no dominant card colour), and
+  `handleStamp` calls `Store.OnClaims` (= `Hub.AnnounceContacts`, a
+  `{"t":"contacts"}` frame with the whole list to every socket) after
+  a claim is made or released. No table of its own. `AutoAccepted`
   (name, first, description, card_description): a bot's change to
   only these on an accepted card is self-approved like a person's —
   the pointer moves, no pending, no wedge.

@@ -656,3 +656,50 @@ func TestNormalizeRuns(t *testing.T) {
 		t.Errorf("exactly the limit is fine: %v", err)
 	}
 }
+
+// overriding is a member source that also carries the site's overrides (a claim).
+type overriding struct {
+	*memMembers
+	ov map[string]Override
+}
+
+func (o *overriding) Overrides() (map[string]Override, error) { return o.ov, nil }
+
+func TestSiteOverridesRideContactsAndAClaimReannouncesThem(t *testing.T) {
+	store := &memStore{}
+	src := &overriding{memMembers: &memMembers{members: []shared.Member{member("andrew", true), member("abi", true)}}}
+	h := NewHub(store, src)
+	h.now = func() time.Time { return time.Date(2026, 10, 31, 20, 0, 0, 0, time.UTC) }
+	andrew := h.add("andrew")
+	hello := next(t, andrew)
+	for _, c := range hello["contacts"].([]any) {
+		m := c.(map[string]any)
+		if _, has := m["character"]; has {
+			t.Fatalf("no claim, no character key: %v", m)
+		}
+	}
+	next(t, andrew) // his own presence
+	// andrew claims Gon: the roster tells the hub, and everyone gets the whole list again
+	src.ov = map[string]Override{"andrew": {Character: "Gon", AvatarURL: "/hxh/api/db/images/231/thumb"}}
+	h.AnnounceContacts()
+	f := next(t, andrew)
+	if f["t"] != "contacts" {
+		t.Fatalf("want a contacts frame, got %v", f)
+	}
+	got := map[string]map[string]any{}
+	for _, c := range f["contacts"].([]any) {
+		m := c.(map[string]any)
+		got[m["username"].(string)] = m
+	}
+	if got["andrew"]["character"] != "Gon" || got["andrew"]["avatar_url"] != "/hxh/api/db/images/231/thumb" || got["andrew"]["color"] != "#123456" {
+		t.Fatalf("andrew should carry the character and its picture, colour his own: %v", got["andrew"])
+	}
+	if _, has := got["abi"]["character"]; has {
+		t.Fatalf("abi claimed nothing: %v", got["abi"])
+	}
+	// a plain member source (no overrides) still works
+	plain, _, _, _ := newTestHub()
+	if cs, err := plain.Contacts(); err != nil || len(cs) != 3 || cs[0].Character != "" {
+		t.Fatalf("plain source: %v %v", cs, err)
+	}
+}

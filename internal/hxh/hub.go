@@ -11,6 +11,7 @@
 //	                 {"t":"msg","msg":{id,room,sender,body,created_at,image?:{id,width,height}}}
 //	                 {"t":"typing","room":R,"user":U}
 //	                 {"t":"presence","user":U,"state":S,"last_seen_at":T}
+//	                 {"t":"contacts","contacts":[…]}          (a site override changed: a claim)
 //	                 {"t":"read","room":R,"id":N}  (to the user's OTHER tabs)
 //	                 {"t":"pong"}  {"t":"error","code":C,"room":R}
 //
@@ -75,6 +76,23 @@ type Contact struct {
 	State       string     `json:"state"`
 	IsBot       bool       `json:"is_bot"`
 	LastSeenAt  *time.Time `json:"last_seen_at"`
+	// The site's own overrides of the shared profile (Andrew, 2026-09-22):
+	// on hxh a member who has claimed a character carries the character's
+	// short name and its avatar picture; the colour stays the member's own.
+	Character string `json:"character,omitempty"`
+	AvatarURL string `json:"avatar_url,omitempty"`
+}
+
+// Override is what a site adds to a member on top of the shared profile.
+type Override struct {
+	Character string
+	AvatarURL string
+}
+
+// overrideSource is a memberSource that also knows the site's per-member
+// overrides; a plain memberSource has none.
+type overrideSource interface {
+	Overrides() (map[string]Override, error)
 }
 
 // GoneGrace: how long after its last socket closed an instance still counts
@@ -218,15 +236,39 @@ func (h *Hub) Contacts() ([]Contact, error) {
 
 // contactsOf is a presence snapshot of `members`; it records nothing.
 func (h *Hub) contactsOf(members []shared.Member) []Contact {
+	var ov map[string]Override
+	if src, ok := h.members.(overrideSource); ok {
+		if o, err := src.Overrides(); err != nil {
+			log.Printf("[hxh chat] overrides: %v", err)
+		} else {
+			ov = o
+		}
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	now := h.now()
 	out := make([]Contact, 0, len(members))
 	for _, m := range members {
 		state := presenceState(m, h.open(m.Username, now), now)
-		out = append(out, Contact{Username: m.Username, DisplayName: m.DisplayName, Initial: m.Initial, Color: m.Color, State: state, IsBot: m.IsBot, LastSeenAt: m.LastSeenAt})
+		c := Contact{Username: m.Username, DisplayName: m.DisplayName, Initial: m.Initial, Color: m.Color, State: state, IsBot: m.IsBot, LastSeenAt: m.LastSeenAt}
+		if o, ok := ov[m.Username]; ok {
+			c.Character, c.AvatarURL = o.Character, o.AvatarURL
+		}
+		out = append(out, c)
 	}
 	return out
+}
+
+// AnnounceContacts sends everyone the whole contact list again — a
+// site override changed (a claim was made or released), which is not a
+// presence change and so has no message of its own.
+func (h *Hub) AnnounceContacts() {
+	contacts, err := h.Contacts()
+	if err != nil {
+		log.Printf("[hxh chat] announce contacts: %v", err)
+		return
+	}
+	h.broadcastAll(map[string]any{"t": "contacts", "contacts": contacts})
 }
 
 // reachable: may `user` be messaged right now? Online or away — not
