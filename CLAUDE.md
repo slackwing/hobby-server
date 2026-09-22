@@ -166,6 +166,15 @@ state, etc.) as needed.
   frozen — Review, patch, upload and requests answer 400 — until
   `POST /chars/{id}/resurrect` (the bot, on Andrew's word) sets it
   pending with a "resurrected" review-log line. Never numbered.
+  Stamps (changeset 016, 2026-09-21): `hxh_stamp` — a member's heart
+  (public, anonymous, drawn on the card at the saved pos_x/pos_y %
+  and rotation so everyone sees it the same) or bookmark (private) on
+  an accepted card, one per member per card per kind. `GET /db/stamps`
+  (any hxh role) → everyone's hearts + my hearts + my bookmarks;
+  `POST /db/chars/{id}/stamp {kind, x, y, rotation}` toggles and
+  answers `{on}`. The Binder's panel keys (heart / bookmark / Become,
+  the last off until registration) drive it; bookmark pages come
+  first in the binder.
   The 2026-09-17 `hxh_characters` roster tables stay as a cross-check
   source.
 - `internal/hxh/chat.go` + `hub.go` — the chat endpoints, profile-run

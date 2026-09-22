@@ -1401,6 +1401,8 @@ func MountRosterDB(r chi.Router, store *Store, auth *shared.Store) {
 		g.Group(func(m chi.Router) {
 			m.Use(requireHxh(auth, false))
 			m.Get("/binder", handleBinder(store))
+			m.Get("/stamps", handleStamps(store))
+			m.Post("/chars/{id}/stamp", handleStamp(store))
 			m.Get("/images/{id}", handleImageData(store, false))
 			m.Get("/images/{id}/thumb", handleImageData(store, true))
 		})
@@ -1482,6 +1484,131 @@ func (s *Store) Binder() ([]BinderCard, error) {
 		out = append(out, card)
 	}
 	return out, rows.Err()
+}
+
+/* ---------- stamps: hearts (public, anonymous) and bookmarks (private) ---------- */
+
+var StampKinds = []string{"heart", "bookmark"}
+
+// Heart is one member's heart on a card, without the member: where it
+// sits on the description box (% of the box) and how it leans.
+type Heart struct {
+	CharID   int64   `json:"char_id"`
+	X        float32 `json:"x"`
+	Y        float32 `json:"y"`
+	Rotation float32 `json:"rotation"`
+}
+
+// Stamps is what one member sees: everyone's hearts, and which cards
+// they themselves hearted or bookmarked.
+type Stamps struct {
+	Hearts    []Heart `json:"hearts"`
+	Mine      []int64 `json:"hearts_mine"`
+	Bookmarks []int64 `json:"bookmarks"`
+}
+
+func (s *Store) Stamps(username string) (*Stamps, error) {
+	ctx, cancel := withCtx()
+	defer cancel()
+	out := &Stamps{Hearts: []Heart{}, Mine: []int64{}, Bookmarks: []int64{}}
+	rows, err := s.pool.Query(ctx, `SELECT char_id, pos_x, pos_y, rotation, username = $1, kind FROM hxh_stamp ORDER BY created_at, id`, username)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var h Heart
+		var mine bool
+		var kind string
+		if err := rows.Scan(&h.CharID, &h.X, &h.Y, &h.Rotation, &mine, &kind); err != nil {
+			return nil, err
+		}
+		switch kind {
+		case "heart":
+			out.Hearts = append(out.Hearts, h)
+			if mine {
+				out.Mine = append(out.Mine, h.CharID)
+			}
+		case "bookmark":
+			if mine {
+				out.Bookmarks = append(out.Bookmarks, h.CharID)
+			}
+		}
+	}
+	return out, rows.Err()
+}
+
+// ToggleStamp adds the member's stamp of that kind on the card at the
+// spot given, or removes it when it is already there. Answers whether
+// it is on now. Only accepted (binder) cards take stamps.
+func (s *Store) ToggleStamp(username string, charID int64, kind string, x, y, rot float32) (bool, error) {
+	if !in(StampKinds, kind) {
+		return false, fmt.Errorf("%w: kind must be heart or bookmark", ErrBadInput)
+	}
+	ctx, cancel := withCtx()
+	defer cancel()
+	var accepted bool
+	err := s.pool.QueryRow(ctx, `SELECT accepted_snapshot IS NOT NULL FROM hxh_char WHERE id = $1`, charID).Scan(&accepted)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, ErrNotFound
+	}
+	if err != nil {
+		return false, err
+	}
+	if !accepted {
+		return false, fmt.Errorf("%w: only a card in the binder takes a stamp", ErrBadInput)
+	}
+	tag, err := s.pool.Exec(ctx, `DELETE FROM hxh_stamp WHERE username = $1 AND char_id = $2 AND kind = $3`, username, charID, kind)
+	if err != nil {
+		return false, err
+	}
+	if tag.RowsAffected() > 0 {
+		return false, nil
+	}
+	_, err = s.pool.Exec(ctx, `INSERT INTO hxh_stamp (username, char_id, kind, pos_x, pos_y, rotation) VALUES ($1, $2, $3, $4, $5, $6)`,
+		username, charID, kind, x, y, rot)
+	if isUnique(err) { // two presses raced: the first won, the stamp is on
+		return true, nil
+	}
+	return err == nil, err
+}
+
+func handleStamps(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		st, err := store.Stamps(userOf(r))
+		if err != nil {
+			fail(w, err, "stamps")
+			return
+		}
+		writeJSON(w, http.StatusOK, st)
+	}
+}
+
+// handleStamp: {kind, x, y, rotation} toggles the member's stamp on the card.
+func handleStamp(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, ok := idParam(r, "id")
+		if !ok {
+			fail(w, ErrNotFound, "")
+			return
+		}
+		var body struct {
+			Kind     string  `json:"kind"`
+			X        float32 `json:"x"`
+			Y        float32 `json:"y"`
+			Rotation float32 `json:"rotation"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&body); err != nil {
+			fail(w, fmt.Errorf("%w: bad json", ErrBadInput), "stamp")
+			return
+		}
+		on, err := store.ToggleStamp(userOf(r), id, body.Kind, body.X, body.Y, body.Rotation)
+		if err != nil {
+			fail(w, err, "stamp")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"on": on, "kind": body.Kind, "char_id": id, "x": body.X, "y": body.Y, "rotation": body.Rotation})
+	}
 }
 
 func handleBinder(store *Store) http.HandlerFunc {

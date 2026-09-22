@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        Stamps (Andrew, 2026-09-21): a member's mark on a binder card.
+        kind heart = "I like this character!" — public, anonymous, one per
+        member per card, drawn on the card's description box at the saved
+        spot (x, y in % of the box, rotation in degrees) so it looks the
+        same to everyone every time. kind bookmark = "Bookmark for
+        myself" — private, one per member per card, fills the bookmark
+        tabs at the front of the binder. Pressing again removes it.
+    -->
+
+    <changeSet id="016-stamps" author="hxh">
+        <createTable tableName="hxh_stamp">
+            <column name="id" type="BIGINT" autoIncrement="true">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="username" type="VARCHAR(50)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="char_id" type="BIGINT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="kind" type="VARCHAR(10)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="pos_x" type="REAL" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="pos_y" type="REAL" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="rotation" type="REAL" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <addForeignKeyConstraint
+            constraintName="fk_hxh_stamp_char"
+            baseTableName="hxh_stamp" baseColumnNames="char_id"
+            referencedTableName="hxh_char" referencedColumnNames="id"
+            onDelete="CASCADE"/>
+        <addUniqueConstraint tableName="hxh_stamp" columnNames="username, char_id, kind" constraintName="uq_hxh_stamp_one_per_member"/>
+        <createIndex tableName="hxh_stamp" indexName="idx_hxh_stamp_char">
+            <column name="char_id"/>
+            <column name="kind"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

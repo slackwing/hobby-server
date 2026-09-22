@@ -350,3 +350,12 @@ func TestSkippedIsAStateNotAVerdict(t *testing.T) {
 		t.Fatalf("skipped as a verdict: want ErrBadInput, got %v", err)
 	}
 }
+
+func TestToggleStampKinds(t *testing.T) {
+	if _, err := (&Store{}).ToggleStamp("abi", 1, "star", 0, 0, 0); !errors.Is(err, ErrBadInput) {
+		t.Fatalf("unknown kind: want ErrBadInput, got %v", err)
+	}
+	if !in(StampKinds, "heart") || !in(StampKinds, "bookmark") {
+		t.Fatal("kinds are heart and bookmark")
+	}
+}
