@@ -155,9 +155,11 @@ state, etc.) as needed.
   a count (`open_requests`), not a state: filing, resolving and
   verdicts never touch each other. Guards: a bot cannot pass a
   verdict; a picture on an accepted card cannot be deleted (409).
-  Changeset 015 (2026-09-21): `card_number` is NULL until the first
-  Accept, which hands out max+1; `/chars/{id}/move` works on numbered
-  cards only. Request statuses are open / done / dropped, and
+  Changeset 015 (2026-09-21) made `card_number` NULL until the first
+  Accept; changeset 017 (2026-09-22) reversed that — every card is
+  numbered (backfilled in id order after the accepted ones, NOT NULL
+  again, max+1 at creation), the list is in number order only, and
+  `/chars/{id}/move` works on every card. Request statuses are open / done / dropped, and
   `POST /requests/{id}/resolve {status, note}` records how it ended
   (`resolution`); deleting a picture drops its open requests.
   "skipped" (2026-09-21, no changeset): a fourth review_status for a

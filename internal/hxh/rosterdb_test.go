@@ -259,13 +259,12 @@ func TestMoveOrder(t *testing.T) {
 
 func TestDiffCharListsOnlyWhatChanged(t *testing.T) {
 	seven := int64(7)
-	one, three := 1, 3
-	before := &Char{Name: "Gon", NenTypes: []string{"enhancement"}, Arcs: []string{"hunter-exam"}, Arms: []string{}, CardNumber: &one}
+	before := &Char{Name: "Gon", NenTypes: []string{"enhancement"}, Arcs: []string{"hunter-exam"}, Arms: []string{}, CardNumber: 1}
 	after := *before
 	after.Name = "Gon Freecss"
 	after.NenTypes = []string{"enhancement", "emission"}
 	after.AvatarImageID = &seven
-	after.CardNumber = &three
+	after.CardNumber = 3
 	rows := diffChar(before, &after)
 	got := map[string][2]string{}
 	for _, r := range rows {
@@ -324,16 +323,13 @@ func TestResolveRequestStatuses(t *testing.T) {
 	}
 }
 
-func TestPatchCardNumberNeedsANumberedCard(t *testing.T) {
-	c := &Char{Name: "Gon", Rank: "C", ReviewStatus: "pending", NenTypes: []string{}, Arcs: []string{}, Arms: []string{}}
-	err := applyPatch(c, map[string]json.RawMessage{"card_number": json.RawMessage("5")})
-	if !errors.Is(err, ErrBadInput) {
-		t.Fatalf("unnumbered card: want ErrBadInput, got %v", err)
+func TestPatchCardNumber(t *testing.T) {
+	c := &Char{Name: "Gon", Rank: "C", ReviewStatus: "pending", NenTypes: []string{}, Arcs: []string{}, Arms: []string{}, CardNumber: 1}
+	if err := applyPatch(c, map[string]json.RawMessage{"card_number": json.RawMessage("5")}); err != nil || c.CardNumber != 5 {
+		t.Fatalf("got %v, %v", err, c.CardNumber)
 	}
-	one := 1
-	c.CardNumber = &one
-	if err := applyPatch(c, map[string]json.RawMessage{"card_number": json.RawMessage("5")}); err != nil || *c.CardNumber != 5 {
-		t.Fatalf("numbered card: got %v, %v", err, c.CardNumber)
+	if err := applyPatch(c, map[string]json.RawMessage{"card_number": json.RawMessage("-1")}); !errors.Is(err, ErrBadInput) {
+		t.Fatalf("negative: want ErrBadInput, got %v", err)
 	}
 }
 

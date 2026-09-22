@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        Andrew, 2026-09-22: every card is numbered, whatever its status —
+        numbering only on acceptance left gaps and made the list's
+        status grouping fight the binder order, so dragging rows stopped
+        meaning "renumber". Cards that have no number take the next ones
+        in id order (accepted cards keep theirs); a new character takes
+        max+1 at creation again; the list is always in number order.
+    -->
+
+    <changeSet id="017-number-everyone" author="hxh">
+        <sql>
+            UPDATE hxh_char c SET card_number = n.n
+            FROM (SELECT id, (SELECT COALESCE(MAX(card_number), 0) FROM hxh_char) + ROW_NUMBER() OVER (ORDER BY id) AS n
+                  FROM hxh_char WHERE card_number IS NULL) n
+            WHERE c.id = n.id;
+        </sql>
+        <addNotNullConstraint tableName="hxh_char" columnName="card_number" columnDataType="INT"/>
+    </changeSet>
+
+</databaseChangeLog>

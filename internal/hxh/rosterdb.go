@@ -90,7 +90,7 @@ var (
 
 type Char struct {
 	ID              int64          `json:"id"`
-	CardNumber      *int           `json:"card_number"` // the binder position; nil until first accepted; not unique on purpose (Andrew, 2026-09-21)
+	CardNumber      int            `json:"card_number"` // the binder position, every card has one; not unique on purpose (Andrew, 2026-09-21/22)
 	Name            string         `json:"name"`
 	NameJA          string         `json:"name_ja"`
 	First           string         `json:"first"`
@@ -440,7 +440,7 @@ func (s *Store) ListChars(status, name string) ([]Char, error) {
 	ctx, cancel := withCtx()
 	defer cancel()
 	rows, err := s.pool.Query(ctx, `SELECT `+charCols+` FROM hxh_char c
-		WHERE ($1 = '' OR c.review_status = $1) AND ($2 = '' OR lower(c.name) = lower($2)) ORDER BY c.card_number NULLS LAST, c.id`, status, strings.TrimSpace(name))
+		WHERE ($1 = '' OR c.review_status = $1) AND ($2 = '' OR lower(c.name) = lower($2)) ORDER BY c.card_number, c.id`, status, strings.TrimSpace(name))
 	if err != nil {
 		return nil, err
 	}
@@ -644,13 +644,7 @@ func diffChar(before, after *Char) []Change {
 	set("notes", before.Notes, after.Notes)
 	set("avatar_image_id", ref(before.AvatarImageID), ref(after.AvatarImageID))
 	set("card_image_id", ref(before.CardImageID), ref(after.CardImageID))
-	num := func(p *int) string {
-		if p == nil {
-			return ""
-		}
-		return strconv.Itoa(*p)
-	}
-	set("card_number", num(before.CardNumber), num(after.CardNumber))
+	set("card_number", strconv.Itoa(before.CardNumber), strconv.Itoa(after.CardNumber))
 	return out
 }
 
@@ -746,8 +740,7 @@ func (s *Store) Review(id int64, status, reason, owner string, bot bool) (*Char,
 	var version int
 	q := `UPDATE hxh_char SET review_status = $2, review_reason = $3 WHERE id = $1 RETURNING version`
 	if status == "accepted" {
-		q = `UPDATE hxh_char SET review_status = $2, review_reason = $3, accepted_version = version, accepted_snapshot = ` + snapshotExpr + `,
-			card_number = COALESCE(card_number, (SELECT COALESCE(MAX(x.card_number), 0) + 1 FROM hxh_char x)) WHERE id = $1 RETURNING version`
+		q = `UPDATE hxh_char SET review_status = $2, review_reason = $3, accepted_version = version, accepted_snapshot = ` + snapshotExpr + ` WHERE id = $1 RETURNING version`
 	}
 	err = tx.QueryRow(ctx, q, id, status, reason).Scan(&version)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -969,8 +962,8 @@ func (s *Store) CreateChar(c Char) (*Char, error) {
 	defer cancel()
 	var id int64
 	err := s.pool.QueryRow(ctx, `INSERT INTO hxh_char
-		(name, name_ja, first, rank, nen_types, affiliation, arcs, arms, description, card_description, notes, owner, review_status, review_reason)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
+		(name, name_ja, first, rank, nen_types, affiliation, arcs, arms, description, card_description, notes, owner, review_status, review_reason, card_number)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14, (SELECT COALESCE(MAX(card_number), 0) + 1 FROM hxh_char)) RETURNING id`,
 		c.Name, c.NameJA, c.First, c.Rank, joinSlugs(c.NenTypes), c.Affiliation,
 		joinSlugs(c.Arcs), joinSlugs(c.Arms), c.Description, c.CardDesc, c.Notes, c.Owner, c.ReviewStatus, c.ReviewReason).Scan(&id)
 	if err != nil {
@@ -1072,12 +1065,9 @@ func applyPatch(c *Char, patch map[string]json.RawMessage) error {
 		}
 	}
 	if raw, ok := patch["card_number"]; ok {
-		var v *int
-		if err := json.Unmarshal(raw, &v); err != nil || v == nil || *v < 0 {
+		var v int
+		if err := json.Unmarshal(raw, &v); err != nil || v < 0 {
 			return fmt.Errorf("%w: card_number must be a whole number", ErrBadInput)
-		}
-		if c.CardNumber == nil {
-			return fmt.Errorf("%w: a card gets its number when it is first accepted", ErrBadInput)
 		}
 		c.CardNumber = v
 	}
@@ -1454,8 +1444,8 @@ type BinderCard struct {
 func (s *Store) Binder() ([]BinderCard, error) {
 	ctx, cancel := withCtx()
 	defer cancel()
-	rows, err := s.pool.Query(ctx, `SELECT id, COALESCE(card_number, 0), accepted_version, accepted_snapshot FROM hxh_char
-		WHERE accepted_snapshot IS NOT NULL ORDER BY card_number NULLS LAST, id`)
+	rows, err := s.pool.Query(ctx, `SELECT id, card_number, accepted_version, accepted_snapshot FROM hxh_char
+		WHERE accepted_snapshot IS NOT NULL ORDER BY card_number, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -1697,23 +1687,7 @@ func (s *Store) Move(id, after int64) ([]Char, error) {
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	for _, cid := range []int64{id, after} {
-		if cid == 0 {
-			continue
-		}
-		var n *int
-		err := tx.QueryRow(ctx, `SELECT card_number FROM hxh_char WHERE id = $1`, cid).Scan(&n)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, ErrNotFound
-		}
-		if err != nil {
-			return nil, err
-		}
-		if n == nil {
-			return nil, fmt.Errorf("%w: character %d has no number until it is accepted", ErrBadInput, cid)
-		}
-	}
-	rows, err := tx.Query(ctx, `SELECT id, card_number FROM hxh_char WHERE card_number IS NOT NULL ORDER BY card_number, id FOR UPDATE`)
+	rows, err := tx.Query(ctx, `SELECT id, card_number FROM hxh_char ORDER BY card_number, id FOR UPDATE`)
 	if err != nil {
 		return nil, err
 	}
