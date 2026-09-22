@@ -545,12 +545,29 @@ func (s *Store) GetChar(id int64) (*Char, error) {
 	return c, nil
 }
 
+// AutoAccepted are the fields a bot may change on an accepted card
+// without reopening review (Andrew, 2026-09-22: text fixes should not
+// send a card back to pending — the reviewers look at pending for
+// pictures). A bot's change to anything else still reopens.
+var AutoAccepted = []string{"name", "first", "description", "card_description"}
+
+func textOnly(rows []Change) bool {
+	for _, r := range rows {
+		if r.Kind != "field" || !in(AutoAccepted, r.Field) {
+			return false
+		}
+	}
+	return len(rows) > 0
+}
+
 // changed records what a write did: one version bump, the rows logged
 // under it, and — when the BOT touched an accepted or rejected
-// character — the character back to pending with a review-log line
-// saying why, since the verdict was on a version that no longer
-// exists. A human's change bumps the version but is self-approved and
-// leaves the verdict alone (Andrew, 2026-09-21). No rows, no bump.
+// character in a way that needs a look — the character back to pending
+// with a review-log line saying why, since the verdict was on a version
+// that no longer exists. A human's change, or a bot's change to the
+// AutoAccepted text fields, bumps the version but is self-approved: the
+// accepted card follows it at once (Andrew, 2026-09-21/22). No rows, no
+// bump.
 func (s *Store) changed(ctx context.Context, charID int64, by string, bot bool, rows []Change) error {
 	if len(rows) == 0 {
 		return nil
@@ -572,7 +589,7 @@ func (s *Store) changed(ctx context.Context, charID int64, by string, bot bool, 
 		}
 	}
 	switch {
-	case bot && (status == "accepted" || status == "rejected"):
+	case bot && (status == "accepted" || status == "rejected") && !textOnly(rows):
 		if _, err := tx.Exec(ctx, `UPDATE hxh_char SET review_status = 'pending', review_reason = '' WHERE id = $1`, charID); err != nil {
 			return err
 		}
@@ -580,8 +597,8 @@ func (s *Store) changed(ctx context.Context, charID int64, by string, bot bool, 
 			charID, version, summarize(rows), by); err != nil {
 			return err
 		}
-	case !bot && status == "accepted":
-		// self-approved: the accepted card follows a person's edit at once
+	case status == "accepted":
+		// self-approved (a person's edit, or a bot's text-only edit): the accepted card follows at once
 		if _, err := tx.Exec(ctx, `UPDATE hxh_char SET accepted_version = version, accepted_snapshot = `+snapshotExpr+` WHERE id = $1`, charID); err != nil {
 			return err
 		}
@@ -1392,7 +1409,7 @@ func MountRosterDB(r chi.Router, store *Store, auth *shared.Store) {
 			m.Use(requireHxh(auth, false))
 			m.Get("/binder", handleBinder(store))
 			m.Get("/stamps", handleStamps(store))
-			m.Post("/chars/{id}/stamp", handleStamp(store))
+			m.Post("/chars/{id}/stamp", handleStamp(store, auth))
 			m.Get("/images/{id}", handleImageData(store, false))
 			m.Get("/images/{id}/thumb", handleImageData(store, true))
 		})
@@ -1478,7 +1495,18 @@ func (s *Store) Binder() ([]BinderCard, error) {
 
 /* ---------- stamps: hearts (public, anonymous) and bookmarks (private) ---------- */
 
-var StampKinds = []string{"heart", "bookmark"}
+var StampKinds = []string{"heart", "bookmark", "claim"}
+
+// Claim is a member's name stamped on the card they plan to show up as
+// (Andrew, 2026-09-22): public, named, one per member, one per card.
+type Claim struct {
+	CharID   int64   `json:"char_id"`
+	Username string  `json:"username"`
+	Label    string  `json:"label"` // the name as printed, in capitals
+	X        float32 `json:"x"`
+	Y        float32 `json:"y"`
+	Rotation float32 `json:"rotation"`
+}
 
 // Heart is one member's heart on a card, without the member: where it
 // sits on the description box (% of the box) and how it leans.
@@ -1495,13 +1523,14 @@ type Stamps struct {
 	Hearts    []Heart `json:"hearts"`
 	Mine      []int64 `json:"hearts_mine"`
 	Bookmarks []int64 `json:"bookmarks"`
+	Claims    []Claim `json:"claims"`
 }
 
 func (s *Store) Stamps(username string) (*Stamps, error) {
 	ctx, cancel := withCtx()
 	defer cancel()
-	out := &Stamps{Hearts: []Heart{}, Mine: []int64{}, Bookmarks: []int64{}}
-	rows, err := s.pool.Query(ctx, `SELECT char_id, pos_x, pos_y, rotation, username = $1, kind FROM hxh_stamp ORDER BY created_at, id`, username)
+	out := &Stamps{Hearts: []Heart{}, Mine: []int64{}, Bookmarks: []int64{}, Claims: []Claim{}}
+	rows, err := s.pool.Query(ctx, `SELECT char_id, pos_x, pos_y, rotation, username = $1, kind, username, label FROM hxh_stamp ORDER BY created_at, id`, username)
 	if err != nil {
 		return nil, err
 	}
@@ -1509,8 +1538,8 @@ func (s *Store) Stamps(username string) (*Stamps, error) {
 	for rows.Next() {
 		var h Heart
 		var mine bool
-		var kind string
-		if err := rows.Scan(&h.CharID, &h.X, &h.Y, &h.Rotation, &mine, &kind); err != nil {
+		var kind, who, label string
+		if err := rows.Scan(&h.CharID, &h.X, &h.Y, &h.Rotation, &mine, &kind, &who, &label); err != nil {
 			return nil, err
 		}
 		switch kind {
@@ -1523,6 +1552,8 @@ func (s *Store) Stamps(username string) (*Stamps, error) {
 			if mine {
 				out.Bookmarks = append(out.Bookmarks, h.CharID)
 			}
+		case "claim":
+			out.Claims = append(out.Claims, Claim{CharID: h.CharID, Username: who, Label: label, X: h.X, Y: h.Y, Rotation: h.Rotation})
 		}
 	}
 	return out, rows.Err()
@@ -1530,10 +1561,13 @@ func (s *Store) Stamps(username string) (*Stamps, error) {
 
 // ToggleStamp adds the member's stamp of that kind on the card at the
 // spot given, or removes it when it is already there. Answers whether
-// it is on now. Only accepted (binder) cards take stamps.
-func (s *Store) ToggleStamp(username string, charID int64, kind string, x, y, rot float32) (bool, error) {
+// it is on now. Only accepted (binder) cards take stamps. A claim is
+// one per member — claiming another card releases the old claim — and
+// one per card: a card claimed by someone else answers ErrConflict with
+// that name. label is the member's name as it will be printed.
+func (s *Store) ToggleStamp(username string, charID int64, kind string, x, y, rot float32, label string) (bool, error) {
 	if !in(StampKinds, kind) {
-		return false, fmt.Errorf("%w: kind must be heart or bookmark", ErrBadInput)
+		return false, fmt.Errorf("%w: kind must be heart, bookmark or claim", ErrBadInput)
 	}
 	ctx, cancel := withCtx()
 	defer cancel()
@@ -1548,19 +1582,50 @@ func (s *Store) ToggleStamp(username string, charID int64, kind string, x, y, ro
 	if !accepted {
 		return false, fmt.Errorf("%w: only a card in the binder takes a stamp", ErrBadInput)
 	}
-	tag, err := s.pool.Exec(ctx, `DELETE FROM hxh_stamp WHERE username = $1 AND char_id = $2 AND kind = $3`, username, charID, kind)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	tag, err := tx.Exec(ctx, `DELETE FROM hxh_stamp WHERE username = $1 AND char_id = $2 AND kind = $3`, username, charID, kind)
 	if err != nil {
 		return false, err
 	}
 	if tag.RowsAffected() > 0 {
-		return false, nil
+		return false, tx.Commit(ctx)
 	}
-	_, err = s.pool.Exec(ctx, `INSERT INTO hxh_stamp (username, char_id, kind, pos_x, pos_y, rotation) VALUES ($1, $2, $3, $4, $5, $6)`,
-		username, charID, kind, x, y, rot)
+	if kind == "claim" {
+		var holder string
+		err := tx.QueryRow(ctx, `SELECT label FROM hxh_stamp WHERE char_id = $1 AND kind = 'claim' FOR UPDATE`, charID).Scan(&holder)
+		if err == nil {
+			return false, fmt.Errorf("%w: claimed by %s", ErrConflict, holder)
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return false, err
+		}
+		// a change of mind: the member's old claim, wherever it was, is released
+		if _, err := tx.Exec(ctx, `DELETE FROM hxh_stamp WHERE username = $1 AND kind = 'claim'`, username); err != nil {
+			return false, err
+		}
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO hxh_stamp (username, char_id, kind, pos_x, pos_y, rotation, label) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		username, charID, kind, x, y, rot, label)
 	if isUnique(err) { // two presses raced: the first won, the stamp is on
 		return true, nil
 	}
-	return err == nil, err
+	if err != nil {
+		return false, err
+	}
+	return true, tx.Commit(ctx)
+}
+
+// stampLabel is the member's name as a claim prints it: the display
+// name in capitals, the username when there is none.
+func stampLabel(auth *shared.Store, username string) string {
+	if a, err := auth.GetUser(username); err == nil && a != nil && strings.TrimSpace(a.DisplayName) != "" {
+		return strings.ToUpper(strings.TrimSpace(a.DisplayName))
+	}
+	return strings.ToUpper(username)
 }
 
 func handleStamps(store *Store) http.HandlerFunc {
@@ -1575,7 +1640,7 @@ func handleStamps(store *Store) http.HandlerFunc {
 }
 
 // handleStamp: {kind, x, y, rotation} toggles the member's stamp on the card.
-func handleStamp(store *Store) http.HandlerFunc {
+func handleStamp(store *Store, auth *shared.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, ok := idParam(r, "id")
 		if !ok {
@@ -1592,12 +1657,16 @@ func handleStamp(store *Store) http.HandlerFunc {
 			fail(w, fmt.Errorf("%w: bad json", ErrBadInput), "stamp")
 			return
 		}
-		on, err := store.ToggleStamp(userOf(r), id, body.Kind, body.X, body.Y, body.Rotation)
+		label := ""
+		if body.Kind == "claim" {
+			label = stampLabel(auth, userOf(r))
+		}
+		on, err := store.ToggleStamp(userOf(r), id, body.Kind, body.X, body.Y, body.Rotation, label)
 		if err != nil {
 			fail(w, err, "stamp")
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"on": on, "kind": body.Kind, "char_id": id, "x": body.X, "y": body.Y, "rotation": body.Rotation})
+		writeJSON(w, http.StatusOK, map[string]any{"on": on, "kind": body.Kind, "char_id": id, "x": body.X, "y": body.Y, "rotation": body.Rotation, "label": label})
 	}
 }
 

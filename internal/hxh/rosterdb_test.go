@@ -348,10 +348,23 @@ func TestSkippedIsAStateNotAVerdict(t *testing.T) {
 }
 
 func TestToggleStampKinds(t *testing.T) {
-	if _, err := (&Store{}).ToggleStamp("abi", 1, "star", 0, 0, 0); !errors.Is(err, ErrBadInput) {
+	if _, err := (&Store{}).ToggleStamp("abi", 1, "star", 0, 0, 0, ""); !errors.Is(err, ErrBadInput) {
 		t.Fatalf("unknown kind: want ErrBadInput, got %v", err)
 	}
-	if !in(StampKinds, "heart") || !in(StampKinds, "bookmark") {
-		t.Fatal("kinds are heart and bookmark")
+	if !in(StampKinds, "heart") || !in(StampKinds, "bookmark") || !in(StampKinds, "claim") {
+		t.Fatal("kinds are heart, bookmark and claim")
+	}
+}
+
+func TestTextOnlyChanges(t *testing.T) {
+	id := int64(1)
+	if !textOnly([]Change{{Kind: "field", Field: "description"}, {Kind: "field", Field: "first"}}) {
+		t.Fatal("name/first/description/card_description are auto-accepted")
+	}
+	if textOnly([]Change{{Kind: "field", Field: "description"}, {Kind: "field", Field: "rank"}}) {
+		t.Fatal("rank is not")
+	}
+	if textOnly([]Change{{Kind: "image", Action: "added", ImageID: &id}}) || textOnly(nil) {
+		t.Fatal("pictures and empty sets are not")
 	}
 }

@@ -28,5 +28,6 @@
     <include file="changelog/015-number-on-accept.xml"/>
     <include file="changelog/016-stamps.xml"/>
     <include file="changelog/017-number-everyone.xml"/>
+    <include file="changelog/018-claims.xml"/>
 
 </databaseChangeLog>

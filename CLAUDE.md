@@ -177,6 +177,14 @@ state, etc.) as needed.
   answers `{on}`. The Binder's panel keys (heart / bookmark / Become,
   the last off until registration) drive it; bookmark pages come
   first in the binder.
+  Claims (changeset 018, 2026-09-22): stamp kind `claim` = "This is
+  me!", one per member (a new claim releases the old) and one per
+  card (409 "claimed by NAME" otherwise); the row's `label` is the
+  member's display name in capitals as printed on the card; the
+  stamps payload carries `claims` with names (public). `AutoAccepted`
+  (name, first, description, card_description): a bot's change to
+  only these on an accepted card is self-approved like a person's —
+  the pointer moves, no pending, no wedge.
   The 2026-09-17 `hxh_characters` roster tables stay as a cross-check
   source.
 - `internal/hxh/chat.go` + `hub.go` — the chat endpoints, profile-run
