@@ -15,6 +15,7 @@
 //	DELETE /hxh/api/db/chars/{id}
 //	POST   /hxh/api/db/chars/{id}/images        upload (multipart "file" or raw body)
 //	GET    /hxh/api/db/binder                   accepted characters, card fields only (any hxh role) — the Binder's source
+//	GET    /hxh/api/db/people                   each member's site overrides (a claim: character name, avatar picture) (any hxh role)
 //	GET    /hxh/api/db/images/{id}              the picture (any hxh role)
 //	GET    /hxh/api/db/images/{id}/thumb        its preview (any hxh role)
 //	GET    /hxh/api/db/images/{id}/meta         its row (what the crop page shows)
@@ -1408,6 +1409,7 @@ func MountRosterDB(r chi.Router, store *Store, auth *shared.Store) {
 		g.Group(func(m chi.Router) {
 			m.Use(requireHxh(auth, false))
 			m.Get("/binder", handleBinder(store))
+			m.Get("/people", handlePeople(store))
 			m.Get("/stamps", handleStamps(store))
 			m.Post("/chars/{id}/stamp", handleStamp(store, auth))
 			m.Get("/images/{id}", handleImageData(store, false))
@@ -1698,6 +1700,39 @@ func handleStamp(store *Store, auth *shared.Store) http.HandlerFunc {
 			store.OnClaims()
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"on": on, "kind": body.Kind, "char_id": id, "x": body.X, "y": body.Y, "rotation": body.Rotation, "label": label})
+	}
+}
+
+// Person is what the site changes about a member on top of the shared
+// profile (/admin/api/me and friends): today, a claim's character name
+// and its avatar picture. The page's one People store merges it into
+// every avatar it draws — Start menu, chat, whatever comes next — so a
+// claim shows everywhere at once (Andrew, 2026-09-27: "my start menu
+// avatar [is] still a green AC even though i claimed chrollo… the
+// avatar determination should have been centralized").
+type Person struct {
+	Character string `json:"character,omitempty"`
+	AvatarURL string `json:"avatar_url,omitempty"`
+}
+
+// peopleOf turns the overrides (ClaimOverrides, the same source the chat
+// hub's contacts use) into the /people payload, keyed by username.
+func peopleOf(ov map[string]Override) map[string]Person {
+	out := make(map[string]Person, len(ov))
+	for u, o := range ov {
+		out[u] = Person{Character: o.Character, AvatarURL: o.AvatarURL}
+	}
+	return out
+}
+
+func handlePeople(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ov, err := store.ClaimOverrides()
+		if err != nil {
+			fail(w, err, "people")
+			return
+		}
+		writeJSON(w, http.StatusOK, peopleOf(ov))
 	}
 }
 

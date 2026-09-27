@@ -368,3 +368,20 @@ func TestTextOnlyChanges(t *testing.T) {
 		t.Fatal("pictures and empty sets are not")
 	}
 }
+
+func TestPeopleOfIsTheOverridesByUsername(t *testing.T) {
+	got := peopleOf(map[string]Override{
+		"andrew": {Character: "Chrollo", AvatarURL: "/hxh/api/db/images/7/thumb"},
+		"abi":    {Character: "Bisky"},
+	})
+	if len(got) != 2 || got["andrew"].Character != "Chrollo" || got["andrew"].AvatarURL != "/hxh/api/db/images/7/thumb" || got["abi"].AvatarURL != "" {
+		t.Fatalf("people: %+v", got)
+	}
+	b, _ := json.Marshal(got["abi"])
+	if string(b) != `{"character":"Bisky"}` {
+		t.Fatalf("empty fields are omitted: %s", b)
+	}
+	if b, _ := json.Marshal(peopleOf(nil)); string(b) != "{}" {
+		t.Fatalf("no claims is an empty object, not null: %s", b)
+	}
+}
