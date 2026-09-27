@@ -181,6 +181,11 @@ type Hub struct {
 	// OnMessage, when set, is called (in its own goroutine) for every
 	// message the hub stores — the bot service listens here.
 	OnMessage func(Message)
+	// HideBots leaves bot accounts out of everyone's contact list (set
+	// when the bot service is off: Andrew, 2026-09-27, "i expect to only
+	// see me and abi as users"). The accounts stay — the claude account
+	// still reads the Roster DB — they are just not people to chat with.
+	HideBots bool
 }
 
 func NewHub(store chatStore, members memberSource) *Hub {
@@ -249,6 +254,9 @@ func (h *Hub) contactsOf(members []shared.Member) []Contact {
 	now := h.now()
 	out := make([]Contact, 0, len(members))
 	for _, m := range members {
+		if h.HideBots && m.IsBot {
+			continue
+		}
 		state := presenceState(m, h.open(m.Username, now), now)
 		c := Contact{Username: m.Username, DisplayName: m.DisplayName, Initial: m.Initial, Color: m.Color, State: state, IsBot: m.IsBot, LastSeenAt: m.LastSeenAt}
 		if o, ok := ov[m.Username]; ok {
@@ -316,6 +324,9 @@ func (h *Hub) refreshPresence() {
 	}
 	var changes []change
 	for _, m := range members {
+		if h.HideBots && m.IsBot {
+			continue
+		}
 		state := presenceState(m, h.open(m.Username, now), now)
 		prev, known := h.states[m.Username]
 		if !known {

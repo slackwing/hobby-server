@@ -156,6 +156,7 @@ func main() {
 	if hxhProject != nil && adminStore != nil {
 		hxhStore = hxh.NewStore(hxhPool)
 		hxhChat = hxh.NewChat(hxhStore, adminStore)
+		hxhChat.Hub.HideBots = !cfg.Bots.Enabled // no bot service: no bots in anyone's buddy list
 		go hxhChat.Hub.Run(ctx, 20*time.Second)
 		r.Get(hxhProject.URLPrefix+"/chat/ws", hxhChat.HandleWS())
 	}

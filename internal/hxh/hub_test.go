@@ -703,3 +703,40 @@ func TestSiteOverridesRideContactsAndAClaimReannouncesThem(t *testing.T) {
 		t.Fatalf("plain source: %v %v", cs, err)
 	}
 }
+
+// With the bot service off, bot accounts are nobody's contacts (Andrew,
+// 2026-09-27: "i expect to only see me and abi as users"); with it on,
+// they are listed as before.
+func TestHideBotsLeavesBotAccountsOutOfContacts(t *testing.T) {
+	h, _, members, _ := newTestHub()
+	bot := member("zosima", true)
+	bot.IsBot = true
+	members.members = append(members.members, bot)
+	names := func() []string {
+		cs, err := h.Contacts()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, c := range cs {
+			out = append(out, c.Username)
+		}
+		return out
+	}
+	has := func(list []string, u string) bool {
+		for _, x := range list {
+			if x == u {
+				return true
+			}
+		}
+		return false
+	}
+	if got := names(); !has(got, "zosima") {
+		t.Fatalf("bots on: the bot is a contact, got %v", got)
+	}
+	h.HideBots = true
+	got := names()
+	if has(got, "zosima") || !has(got, "andrew") || !has(got, "abi") {
+		t.Fatalf("bots off: people only, got %v", got)
+	}
+}
