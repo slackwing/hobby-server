@@ -75,6 +75,7 @@ type Contact struct {
 	Color       string     `json:"color"`
 	State       string     `json:"state"`
 	IsBot       bool       `json:"is_bot"`
+	Hidden      bool       `json:"hidden,omitempty"` // not listed as a buddy (a bot while bots are off) — but its name and look still resolve
 	LastSeenAt  *time.Time `json:"last_seen_at"`
 	// The site's own overrides of the shared profile (Andrew, 2026-09-22):
 	// on hxh a member who has claimed a character carries the character's
@@ -181,10 +182,12 @@ type Hub struct {
 	// OnMessage, when set, is called (in its own goroutine) for every
 	// message the hub stores — the bot service listens here.
 	OnMessage func(Message)
-	// HideBots leaves bot accounts out of everyone's contact list (set
+	// HideBots marks bot accounts hidden in everyone's contact list (set
 	// when the bot service is off: Andrew, 2026-09-27, "i expect to only
-	// see me and abi as users"). The accounts stay — the claude account
-	// still reads the Roster DB — they are just not people to chat with.
+	// see me and abi as users"). They stay IN the list, flagged, so their
+	// names, colours and avatars still resolve — dropping them made old
+	// DM windows and history read "nikolai" (Andrew, same day) — and the
+	// buddy list leaves out whoever is hidden.
 	HideBots bool
 }
 
@@ -254,11 +257,8 @@ func (h *Hub) contactsOf(members []shared.Member) []Contact {
 	now := h.now()
 	out := make([]Contact, 0, len(members))
 	for _, m := range members {
-		if h.HideBots && m.IsBot {
-			continue
-		}
 		state := presenceState(m, h.open(m.Username, now), now)
-		c := Contact{Username: m.Username, DisplayName: m.DisplayName, Initial: m.Initial, Color: m.Color, State: state, IsBot: m.IsBot, LastSeenAt: m.LastSeenAt}
+		c := Contact{Username: m.Username, DisplayName: m.DisplayName, Initial: m.Initial, Color: m.Color, State: state, IsBot: m.IsBot, Hidden: h.HideBots && m.IsBot, LastSeenAt: m.LastSeenAt}
 		if o, ok := ov[m.Username]; ok {
 			c.Character, c.AvatarURL = o.Character, o.AvatarURL
 		}
@@ -324,9 +324,6 @@ func (h *Hub) refreshPresence() {
 	}
 	var changes []change
 	for _, m := range members {
-		if h.HideBots && m.IsBot {
-			continue
-		}
 		state := presenceState(m, h.open(m.Username, now), now)
 		prev, known := h.states[m.Username]
 		if !known {

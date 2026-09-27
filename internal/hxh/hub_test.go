@@ -704,39 +704,41 @@ func TestSiteOverridesRideContactsAndAClaimReannouncesThem(t *testing.T) {
 	}
 }
 
-// With the bot service off, bot accounts are nobody's contacts (Andrew,
-// 2026-09-27: "i expect to only see me and abi as users"); with it on,
-// they are listed as before.
-func TestHideBotsLeavesBotAccountsOutOfContacts(t *testing.T) {
+// With the bot service off, bot accounts are hidden from the buddy list
+// (Andrew, 2026-09-27: "i expect to only see me and abi as users") but stay
+// in the contact data, flagged, so their names still resolve — dropping
+// them made old DM windows read "nikolai" (Andrew, same day).
+func TestHideBotsFlagsBotAccountsHidden(t *testing.T) {
 	h, _, members, _ := newTestHub()
-	bot := member("zosima", true)
+	bot := member("nikolai", true)
 	bot.IsBot = true
+	bot.DisplayName = "Nikolai"
 	members.members = append(members.members, bot)
-	names := func() []string {
+	find := func() (Contact, Contact) {
 		cs, err := h.Contacts()
 		if err != nil {
 			t.Fatal(err)
 		}
-		var out []string
+		var b, a Contact
 		for _, c := range cs {
-			out = append(out, c.Username)
-		}
-		return out
-	}
-	has := func(list []string, u string) bool {
-		for _, x := range list {
-			if x == u {
-				return true
+			switch c.Username {
+			case "nikolai":
+				b = c
+			case "andrew":
+				a = c
 			}
 		}
-		return false
+		return b, a
 	}
-	if got := names(); !has(got, "zosima") {
-		t.Fatalf("bots on: the bot is a contact, got %v", got)
+	if b, _ := find(); b.Username == "" || b.Hidden {
+		t.Fatalf("bots on: the bot is a listed contact, got %+v", b)
 	}
 	h.HideBots = true
-	got := names()
-	if has(got, "zosima") || !has(got, "andrew") || !has(got, "abi") {
-		t.Fatalf("bots off: people only, got %v", got)
+	b, a := find()
+	if b.Username != "nikolai" || b.DisplayName != "Nikolai" || !b.Hidden {
+		t.Fatalf("bots off: still sent, with its name, flagged hidden; got %+v", b)
+	}
+	if a.Hidden {
+		t.Fatal("people are never hidden")
 	}
 }
