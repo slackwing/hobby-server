@@ -78,7 +78,7 @@ func (s *Store) InsertChatImage(sender, mime string, width, height int, data []b
 	return id, err
 }
 
-// ImageOwnedFree: does picture `id` belong to `user` and hang on no message yet?
+// ImageOwnedFree: does picture `id` belong to `user` and hang on no message (or bug report) yet?
 func (s *Store) ImageOwnedFree(id int64, user string) (bool, error) {
 	ctx, cancel := withCtx()
 	defer cancel()
@@ -86,6 +86,7 @@ func (s *Store) ImageOwnedFree(id int64, user string) (bool, error) {
 	err := s.pool.QueryRow(ctx, `
 		SELECT COUNT(*) FROM hxh_chat_image i
 		WHERE i.id = $1 AND i.sender = $2 AND NOT EXISTS (SELECT 1 FROM hxh_chat_message m WHERE m.image_id = i.id)
+		  AND NOT EXISTS (SELECT 1 FROM hxh_bug_report b WHERE b.image_id = i.id)   -- nor on a bug report (bugs.go)
 	`, id, user).Scan(&n)
 	return n > 0, err
 }
@@ -488,7 +489,7 @@ func (c *Chat) handleImage(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if sender != user && (room == "" || !canUseRoom(user, room)) {
+	if sender != user && (room == "" || !canUseRoom(user, room)) && !c.adminSeesBugImage(user, id) {
 		http.NotFound(w, r)
 		return
 	}
@@ -499,6 +500,20 @@ func (c *Chat) handleImage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
+}
+
+// adminSeesBugImage: a picture on a bug report is shown to admins (bugs.go),
+// who review the reports; to anyone else it stays the uploader's.
+func (c *Chat) adminSeesBugImage(user string, id int64) bool {
+	if on, err := c.store.BugHasImage(id); err != nil || !on {
+		return false
+	}
+	for _, site := range []string{"hxh", "admin"} {
+		if ok, err := c.auth.HasRole(user, site, "admin"); err == nil && ok {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Chat) handleContacts(w http.ResponseWriter, r *http.Request) {

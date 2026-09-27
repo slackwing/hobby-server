@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        Bug reports (Andrew, 2026-09-27): any member can report one — text
+        and at most one picture (a chat-uploaded hxh_chat_image, as in
+        BeetleChat) plus a snapshot of their screen's state (context) to
+        help reproduce it; admins see them and mark them resolved with a
+        note. Status: pending → resolved (and back, if it recurs).
+    -->
+    <changeSet id="019-bug-reports" author="hxh">
+        <createTable tableName="hxh_bug_report">
+            <column name="id" type="BIGINT" autoIncrement="true"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="reporter" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="body" type="TEXT" defaultValue=""><constraints nullable="false"/></column>
+            <column name="image_id" type="BIGINT"/>
+            <column name="context" type="JSONB" defaultValueComputed="'{}'::jsonb"><constraints nullable="false"/></column>
+            <column name="status" type="VARCHAR(20)" defaultValue="pending"><constraints nullable="false"/></column>
+            <column name="note" type="TEXT" defaultValue=""><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="resolved_at" type="TIMESTAMPTZ"/>
+            <column name="resolved_by" type="VARCHAR(50)"/>
+        </createTable>
+        <sql>ALTER TABLE hxh_bug_report ADD CONSTRAINT hxh_bug_report_status CHECK (status IN ('pending', 'resolved'))</sql>
+        <createIndex tableName="hxh_bug_report" indexName="idx_hxh_bug_report_status"><column name="status"/><column name="created_at"/></createIndex>
+        <createIndex tableName="hxh_bug_report" indexName="idx_hxh_bug_report_image"><column name="image_id"/></createIndex>
+    </changeSet>
+</databaseChangeLog>
