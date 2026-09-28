@@ -803,8 +803,8 @@ func (s *Store) LookupToken(code string) (username, website, kind string, expire
 	return username, website, kind, expiresAt, true, nil
 }
 
-// ConsumeToken atomically marks the token used and sets the user's
-// password hash. Returns the username, the website the token was minted
+// ConsumeToken atomically marks the token used — and every other open
+// token for the same user — and sets the user's password hash. Returns the username, the website the token was minted
 // for and its kind, or ok=false if the token was invalid (already used,
 // expired, unknown).
 func (s *Store) ConsumeToken(code, passwordHash string) (username, website, kind string, ok bool, err error) {
@@ -824,6 +824,16 @@ func (s *Store) ConsumeToken(code, passwordHash string) (username, website, kind
 		return "", "", "", false, nil
 	}
 	if err != nil {
+		return "", "", "", false, err
+	}
+	// One password set voids every other open code for this account —
+	// an older invite or a reset link still sitting in someone's inbox
+	// must not set it again (Andrew, 2026-09-28: "once a password is set
+	// using an invite link, it is invalidated").
+	if _, err := tx.Exec(ctx, `
+		UPDATE hobby_server_password_token SET used_at = NOW()
+		WHERE username = $1 AND used_at IS NULL
+	`, username); err != nil {
 		return "", "", "", false, err
 	}
 	// The first password activates the account (chat visibility starts
