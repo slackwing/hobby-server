@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        Claim plates onto the card (Andrew, 2026-09-27: "the claimed stamps
+        shouldn't go too much into the edge where it can't be seen … migrate
+        current stamps to be more on the card description"). A plate hangs
+        from its bottom-right corner at (pos_x, pos_y), % of the description
+        band. They were stamped at x 90–100, y 94–102, ±8° — up to and past
+        the band's corner, clipping the name. The Binder now stamps at
+        x 84–91, y 78–85, ±6°, all on the white description box; this maps
+        the plates already stamped into that range linearly, so each keeps
+        its place relative to the others, clamped for any outlier. Hearts
+        and bookmarks are untouched.
+    -->
+
+    <changeSet id="020-claim-plates-on-card" author="hxh">
+        <sql>
+            UPDATE hxh_stamp SET
+                pos_x    = LEAST(91, GREATEST(84, 84 + (pos_x - 90) * 0.7)),
+                pos_y    = LEAST(85, GREATEST(78, 78 + (pos_y - 94) * 0.875)),
+                rotation = LEAST(6, GREATEST(-6, rotation * 0.75))
+            WHERE kind = 'claim'
+        </sql>
+    </changeSet>
+</databaseChangeLog>

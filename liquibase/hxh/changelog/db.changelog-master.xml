@@ -30,5 +30,6 @@
     <include file="changelog/017-number-everyone.xml"/>
     <include file="changelog/018-claims.xml"/>
     <include file="changelog/019-bug-reports.xml"/>
+    <include file="changelog/020-claim-plates-on-card.xml"/>
 
 </databaseChangeLog>

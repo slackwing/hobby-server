@@ -181,7 +181,9 @@ state, etc.) as needed.
   me!", one per member (a new claim releases the old) and one per
   card (409 "claimed by NAME" otherwise); the row's `label` is the
   member's display name in capitals as printed on the card; the
-  stamps payload carries `claims` with names (public). A claim is
+  stamps payload carries `claims` with names (public). Changeset 020
+  (2026-09-27) moved existing claim plates onto the card's description
+  box (x 84–91, y 78–85, ±6°), the range the Binder now stamps in. A claim is
   also the site's OVERRIDE of the shared profile in the chat (Andrew,
   2026-09-22: "a specific hobby site like hxh can override the default
   avatar with its own"): `Store.ClaimOverrides()` (claimant → accepted
