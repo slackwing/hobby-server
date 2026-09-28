@@ -146,7 +146,7 @@ func handleLogin(store *Store, cookiePath string, secure bool) http.HandlerFunc 
 			http.Error(w, "username and password required", http.StatusBadRequest)
 			return
 		}
-		acct, err := store.GetUser(req.Username)
+		acct, err := store.FindLogin(req.Username)   // a username or an email
 		if err != nil {
 			log.Printf("[admin] login lookup error: %v", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
@@ -163,14 +163,14 @@ func handleLogin(store *Store, cookiePath string, secure bool) http.HandlerFunc 
 			http.Error(w, "invalid credentials", http.StatusUnauthorized)
 			return
 		}
-		token, err := store.CreateSession(req.Username)
+		token, err := store.CreateSession(acct.Username)
 		if err != nil {
 			log.Printf("[admin] session create error: %v", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
 		setCookie(w, token, cookiePath, secure, false)
-		body, err := mePayload(store, req.Username)
+		body, err := mePayload(store, acct.Username)
 		if err != nil {
 			log.Printf("[admin] me payload error: %v", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
@@ -327,7 +327,7 @@ func handleForgot(store *Store, email *Email) http.HandlerFunc {
 		}
 		forgotSeen.Unlock()
 		if !seen {
-			if acct, err := store.GetUser(u); err == nil && acct != nil {
+			if acct, err := store.FindLogin(u); err == nil && acct != nil {   // a username or an email
 				go email.SendReset(store, email.base(r), acct)
 			}
 		}

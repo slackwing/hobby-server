@@ -24,6 +24,10 @@ before wiring a new project; the implementation lives in
   (username, website, role) string triplets. What a role MEANS is up
   to each site. Available roles per site: `hobby_server_website_roles`;
   registered sites: `hobby_server_websites`.
+- **Log in with a name or an email** (2026-09-28): `/admin/api/login`
+  and `/admin/api/forgot` take either in `username` (`Store.FindLogin`);
+  an address matches case-insensitively, and only when exactly one
+  account has it.
 - **One SSO session**: cookie `hobby_session`, `Path=/`, HttpOnly,
   30-day sliding. Log in on any site → logged in on all. A site
   decides access by looking at the user's roles, not by having its own

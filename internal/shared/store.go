@@ -261,6 +261,43 @@ func (s *Store) GetUser(username string) (*Account, error) {
 	return &a, nil
 }
 
+// FindLogin resolves what someone typed into a logon's "Applicant name
+// or email" field (Andrew, 2026-09-28): an address (anything with "@")
+// matches an account's email, ignoring case — but only when exactly one
+// account has it, since the admin may give two accounts one address;
+// otherwise it is taken as a username. Nil when nothing matches.
+func (s *Store) FindLogin(ident string) (*Account, error) {
+	ident = strings.TrimSpace(ident)
+	if ident == "" {
+		return nil, nil
+	}
+	if strings.Contains(ident, "@") {
+		ctx, cancel := withCtx()
+		defer cancel()
+		rows, err := s.pool.Query(ctx, `SELECT username FROM hobby_server_user WHERE LOWER(email) = LOWER($1) LIMIT 2`, ident)
+		if err != nil {
+			return nil, err
+		}
+		var names []string
+		for rows.Next() {
+			var n string
+			if err := rows.Scan(&n); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			names = append(names, n)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		if len(names) == 1 {
+			return s.GetUser(names[0])
+		}
+	}
+	return s.GetUser(ident)
+}
+
 func (s *Store) ListUsers() ([]User, error) {
 	ctx, cancel := withCtx()
 	defer cancel()
