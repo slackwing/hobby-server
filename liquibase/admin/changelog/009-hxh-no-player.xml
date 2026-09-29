@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        hxh has no "player" role (2026-09-28, Andrew: "there should be no
+        player role for hxh. only admin and guest"). 007-bots made it for
+        the chat bots; they become guests like everyone else — nothing in
+        the server or the site ever told player from guest (membership is
+        any role on hxh; only admin is special). bap keeps its own player
+        role. The anonymous role (008) is the View-anonymously account's
+        and stays.
+    -->
+
+    <changeSet id="009-hxh-no-player" author="admin">
+        <sql>
+            INSERT INTO hobby_server_user_roles (username, website, role)
+              SELECT username, 'hxh', 'guest' FROM hobby_server_user_roles WHERE website = 'hxh' AND role = 'player'
+            ON CONFLICT DO NOTHING;
+            DELETE FROM hobby_server_user_roles WHERE website = 'hxh' AND role = 'player';
+            DELETE FROM hobby_server_website_roles WHERE website = 'hxh' AND role = 'player';
+        </sql>
+        <rollback>
+            <sql>
+                INSERT INTO hobby_server_website_roles (website, role) VALUES ('hxh', 'player') ON CONFLICT DO NOTHING;
+            </sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

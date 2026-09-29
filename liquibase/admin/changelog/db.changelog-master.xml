@@ -24,5 +24,6 @@
     <include file="changelog/006-presence-activation.xml"/>
     <include file="changelog/007-bots.xml"/>
     <include file="changelog/008-anonymous.xml"/>
+    <include file="changelog/009-hxh-no-player.xml"/>
 
 </databaseChangeLog>
