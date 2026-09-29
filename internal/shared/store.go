@@ -625,6 +625,20 @@ func (s *Store) HasRole(username, website, role string) (bool, error) {
 	return err == nil, err
 }
 
+// HasAnyRole: does the user hold any role on the website?
+func (s *Store) HasAnyRole(username, website string) (bool, error) {
+	ctx, cancel := withCtx()
+	defer cancel()
+	var one int
+	err := s.pool.QueryRow(ctx, `
+		SELECT 1 FROM hobby_server_user_roles WHERE username = $1 AND website = $2 LIMIT 1
+	`, username, website).Scan(&one)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 func (s *Store) AddRole(username, website, role string) error {
 	ctx, cancel := withCtx()
 	defer cancel()
@@ -805,6 +819,19 @@ const (
 // is never persisted or logged. website selects the page skin ("admin"
 // for the default pages).
 func (s *Store) CreateToken(username, website, kind string, ttl time.Duration) (code string, expiresAt time.Time, err error) {
+	// An invite asks someone onto a site: it needs a role there first
+	// (Andrew, 2026-09-28: "don't allow me to send invite using that active
+	// site unless a role has been assigned"). Links and emails both mint
+	// here, so neither can skip it. A reset is for an account, not a site.
+	if kind == KindInvite {
+		ok, err := s.HasAnyRole(username, website)
+		if err != nil {
+			return "", time.Time{}, err
+		}
+		if !ok {
+			return "", time.Time{}, ErrNoRole
+		}
+	}
 	code, err = randomToken()
 	if err != nil {
 		return "", time.Time{}, err

@@ -93,6 +93,7 @@ var (
 
 	ErrNoTemplate = errors.New("no such template")
 	ErrNoEmail    = errors.New("user has no email address")
+	ErrNoRole     = errors.New("no role on that website: assign one before inviting")
 
 	// Times in emails are shown in the party's timezone.
 	eastern = func() *time.Location {

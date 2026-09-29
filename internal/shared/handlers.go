@@ -621,6 +621,10 @@ func handleCreateLink(store *Store, email *Email) http.HandlerFunc {
 			ttl = ResetTTL
 		}
 		code, expiresAt, err := store.CreateToken(req.Username, website, req.Type, ttl)
+		if errors.Is(err, ErrNoRole) {
+			http.Error(w, fmt.Sprintf("no role on %s: assign one before inviting", website), http.StatusConflict)
+			return
+		}
 		if err != nil {
 			log.Printf("[admin] create token error: %v", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
@@ -701,6 +705,9 @@ func handleSendEmail(store *Store, email *Email) http.HandlerFunc {
 		case err == nil:
 		case errors.Is(err, ErrNoEmail):
 			http.Error(w, "user has no email address", http.StatusBadRequest)
+			return
+		case errors.Is(err, ErrNoRole):
+			http.Error(w, fmt.Sprintf("no role on %s: assign one before inviting", req.Website), http.StatusConflict)
 			return
 		case errors.Is(err, ErrNoTemplate):
 			http.Error(w, "no such template for that website", http.StatusNotFound)

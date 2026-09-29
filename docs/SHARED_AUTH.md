@@ -119,7 +119,13 @@ One-time codes carrying a kind (`invite` | `reset`) and a website; DB
 stores only the SHA-256. Invite links (`/<site>/_invite/?code=...`,
 7d) and reset links (`/<site>/_reset/?code=...`, 1h) both set a
 password for the username baked into the code; only an invite fires
-the account-created email. Every code works once, and setting a
+the account-created email. An invite needs a role on its website first
+(2026-09-28): `CreateToken` refuses (`ErrNoRole`, HTTP 409) and the
+console greys the invite buttons with a "no role on <site>" tooltip —
+login and invites are site-agnostic, so without this an account with no
+role could be invited to, and sign in on, a site it has no place on.
+Sites must also refuse a signed-in account that holds no role there
+(hxh: "No role assigned. Contact system administrator." + Log out). Every code works once, and setting a
 password with any code voids all of that user's other open codes
 (older invites, reset links) in the same transaction. Generate links (copied to the clipboard) or
 send them by email from the `/admin/` console; users can request a
