@@ -35,6 +35,22 @@ before wiring a new project; the implementation lives in
   every role there is anonymous; sites must refuse such a user's actions
   server-side (hxh: stamps, bug reports, chat socket/history/profile/
   images → 403, empty contacts), and `ListMembers` never lists it.
+- **Gate writes with `MayAct(user, site)`** (2026-09-28 security
+  review): a valid session is NOT enough for any endpoint that changes
+  something — anyone can sign in as the public `anonymous` account.
+  `MayAct` = holds a role on the site and is not anonymous. bap uses it;
+  every new site must. The `anonymous` user is hard-blocked by NAME:
+  always anonymous, `HasRole` false for anything but `anonymous`,
+  `AddRole` and `CreateToken` refuse it (409), never listed; its
+  sessions last 12 h and are never extended.
+- **Brute-force limits**: login, forgot and set-password are throttled
+  per client address (20 / 5 min, the last X-Forwarded-For hop) and
+  logins per account (10 / 15 min, not the anonymous one) → 429; bodies
+  are capped at 4 KB; at most 4 argon2id hashes run at once. Setting a
+  password signs the account out of every existing session.
+- **Production MUST set `email.site_base_url`**: without it links and
+  template fetches follow the request's Host header, which a forged
+  request controls (a reset email pointing at an attacker's site).
 - **One SSO session**: cookie `hobby_session`, `Path=/`, HttpOnly,
   30-day sliding. Log in on any site → logged in on all. A site
   decides access by looking at the user's roles, not by having its own

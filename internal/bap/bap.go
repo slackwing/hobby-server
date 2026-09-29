@@ -178,6 +178,18 @@ func requireLogin(auth *shared.Store) func(http.Handler) http.Handler {
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
 			}
+			// a session is not enough: a bap role, and not the public anonymous account — which could
+			// otherwise shatter the cup on repeat and page Andrew on Telegram each time (review, 2026-09-28)
+			ok, err = auth.MayAct(username, "bap")
+			if err != nil {
+				log.Printf("[bap] role check error: %v", err)
+				http.Error(w, "internal error", http.StatusInternalServerError)
+				return
+			}
+			if !ok {
+				http.Error(w, "Forbidden", http.StatusForbidden)
+				return
+			}
 			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userKey, username)))
 		})
 	}

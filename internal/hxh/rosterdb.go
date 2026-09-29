@@ -15,6 +15,7 @@
 //	DELETE /hxh/api/db/chars/{id}
 //	POST   /hxh/api/db/chars/{id}/images        upload (multipart "file" or raw body)
 //	GET    /hxh/api/db/binder                   accepted characters, card fields only (any hxh role) — the Binder's source
+//	GET    /hxh/api/db/private                  the private details (the party's address) (members, not anonymous)
 //	GET    /hxh/api/db/people                   each member's site overrides (a claim: character name, avatar picture) (any hxh role)
 //	GET    /hxh/api/db/images/{id}              the picture (any hxh role)
 //	GET    /hxh/api/db/images/{id}/thumb        its preview (any hxh role)
@@ -1431,6 +1432,7 @@ func MountRosterDB(r chi.Router, store *Store, auth *shared.Store) {
 			m.Use(requireHxh(auth, false))
 			m.Get("/binder", handleBinder(store))
 			m.Get("/people", handlePeople(store))
+			m.With(refuseAnonymous(auth)).Get("/private", handlePrivate(store))
 			m.Get("/stamps", handleStamps(store))
 			m.With(refuseAnonymous(auth)).Post("/chars/{id}/stamp", handleStamp(store, auth))
 			m.Get("/images/{id}", handleImageData(store, false))
@@ -1744,6 +1746,39 @@ func peopleOf(ov map[string]Override) map[string]Person {
 		out[u] = Person{Character: o.Character, AvatarURL: o.AvatarURL}
 	}
 	return out
+}
+
+// Private returns the hand-set private details (hxh_private: key → value).
+func (s *Store) Private() (map[string]string, error) {
+	ctx, cancel := withCtx()
+	defer cancel()
+	rows, err := s.pool.Query(ctx, `SELECT key, value FROM hxh_private`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			return nil, err
+		}
+		out[k] = v
+	}
+	return out, rows.Err()
+}
+
+// handlePrivate: the details only real members may read (the party's
+// address, for the Summons) — never shipped in the public bundle.
+func handlePrivate(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		out, err := store.Private()
+		if err != nil {
+			fail(w, err, "private")
+			return
+		}
+		writeJSON(w, http.StatusOK, out)
+	}
 }
 
 func handlePeople(store *Store) http.HandlerFunc {

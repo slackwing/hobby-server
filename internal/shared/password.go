@@ -40,12 +40,23 @@ var dummyPHC = func() string {
 	return h
 }()
 
+// hashSlots caps how many argon2id hashes run at once: each takes ~19 MiB,
+// so a flood of logins could otherwise exhaust the VM's memory (review,
+// 2026-09-28). Extra callers wait their turn.
+var hashSlots = make(chan struct{}, 4)
+
+func hashKey(password, salt []byte, time, memory uint32, threads uint8, keyLen uint32) []byte {
+	hashSlots <- struct{}{}
+	defer func() { <-hashSlots }()
+	return argon2.IDKey(password, salt, time, memory, threads, keyLen)
+}
+
 func HashPassword(password string) (string, error) {
 	salt := make([]byte, argonSaltLen)
 	if _, err := rand.Read(salt); err != nil {
 		return "", err
 	}
-	key := argon2.IDKey([]byte(password), salt, argonTime, argonMemoryKiB, argonThreads, argonKeyLen)
+	key := hashKey([]byte(password), salt, argonTime, argonMemoryKiB, argonThreads, argonKeyLen)
 	return fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
 		argon2.Version, argonMemoryKiB, argonTime, argonThreads,
 		base64.RawStdEncoding.EncodeToString(salt),
@@ -73,7 +84,7 @@ func VerifyPassword(password, phc string) bool {
 	if err != nil || len(want) == 0 {
 		return false
 	}
-	got := argon2.IDKey([]byte(password), salt, t, m, uint8(p), uint32(len(want)))
+	got := hashKey([]byte(password), salt, t, m, uint8(p), uint32(len(want)))
 	return subtle.ConstantTimeCompare(got, want) == 1
 }
 

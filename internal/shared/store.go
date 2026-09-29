@@ -33,6 +33,7 @@ import (
 // SessionTTL / refresh mirror internal/auth (30-day sliding sessions).
 const (
 	SessionTTL              = 30 * 24 * time.Hour
+	AnonymousSessionTTL     = 12 * time.Hour // the shared public account: a short, never-extended session
 	sessionRefreshThreshold = 7 * 24 * time.Hour
 
 	InviteTTL = 7 * 24 * time.Hour
@@ -295,7 +296,14 @@ func (s *Store) FindLogin(ident string) (*Account, error) {
 			return s.GetUser(names[0])
 		}
 	}
-	return s.GetUser(ident)
+	a, err := s.GetUser(ident)
+	if err != nil || a != nil {
+		return a, err
+	}
+	if lower := strings.ToLower(ident); lower != ident { // usernames are lowercase: "Andrew" is andrew (forgot already lowercased)
+		return s.GetUser(lower)
+	}
+	return nil, nil
 }
 
 func (s *Store) ListUsers() ([]User, error) {
@@ -477,7 +485,8 @@ func (s *Store) ListMembers(website string) ([]Member, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT u.username, u.display_name, u.initial, u.color, u.password_hash IS NOT NULL, u.is_bot, u.last_seen_at, u.activated_at
 		FROM hobby_server_user u
-		WHERE EXISTS (SELECT 1 FROM hobby_server_user_roles r WHERE r.username = u.username AND r.website = $1 AND r.role <> 'anonymous')
+		WHERE u.username <> 'anonymous'
+		  AND EXISTS (SELECT 1 FROM hobby_server_user_roles r WHERE r.username = u.username AND r.website = $1 AND r.role <> 'anonymous')
 		ORDER BY LOWER(u.display_name), u.username
 	`, website)
 	if err != nil {
@@ -513,9 +522,21 @@ func (s *Store) IsBot(username string) (bool, error) {
 // refuse its actions; ListMembers never lists it.
 const RoleAnonymous = "anonymous"
 
+// AnonymousUser is that shared account. Its password is PUBLIC, so it is
+// hard-blocked BY NAME, not just by its roles (review, 2026-09-28): it is
+// always anonymous, can hold no other role (AddRole, HasRole), gets no
+// invite or reset codes (CreateToken), and is never listed as a member.
+const AnonymousUser = "anonymous"
+
+// ErrAnonymousLocked: an attempt to give the anonymous account more than it has.
+var ErrAnonymousLocked = errors.New("the anonymous account cannot be given roles or links")
+
 // IsAnonymous: the user's only roles on the website are RoleAnonymous
 // (someone who also holds a real role there is not held back).
 func (s *Store) IsAnonymous(username, website string) (bool, error) {
+	if username == AnonymousUser {
+		return true, nil
+	}
 	ctx, cancel := withCtx()
 	defer cancel()
 	var anon, other int
@@ -524,6 +545,19 @@ func (s *Store) IsAnonymous(username, website string) (bool, error) {
 		FROM hobby_server_user_roles WHERE username = $1 AND website = $2
 	`, username, website).Scan(&anon, &other)
 	return anon > 0 && other == 0, err
+}
+
+// MayAct: the user holds a real role on the website — a member who is not
+// the anonymous viewer. The gate for any site endpoint that changes
+// anything (a valid session alone is NOT enough: anyone can sign in as
+// the public anonymous account). Review, 2026-09-28.
+func (s *Store) MayAct(username, website string) (bool, error) {
+	member, err := s.IsMember(username, website)
+	if err != nil || !member {
+		return false, err
+	}
+	anon, err := s.IsAnonymous(username, website)
+	return !anon, err
 }
 
 func (s *Store) IsMember(username, website string) (bool, error) {
@@ -630,6 +664,9 @@ func (s *Store) UserRoles(username string) ([]Role, error) {
 }
 
 func (s *Store) HasRole(username, website, role string) (bool, error) {
+	if username == AnonymousUser && role != RoleAnonymous { // whatever the table says: never admin, never a member proper
+		return false, nil
+	}
 	ctx, cancel := withCtx()
 	defer cancel()
 	var one int
@@ -658,6 +695,9 @@ func (s *Store) HasAnyRole(username, website string) (bool, error) {
 }
 
 func (s *Store) AddRole(username, website, role string) error {
+	if username == AnonymousUser && role != RoleAnonymous {
+		return ErrAnonymousLocked
+	}
 	ctx, cancel := withCtx()
 	defer cancel()
 	_, err := s.pool.Exec(ctx, `
@@ -735,6 +775,13 @@ func (s *Store) WebsiteExists(website string) (bool, error) {
 
 // ---------- sessions ----------
 
+func sessionTTLFor(username string) time.Duration {
+	if username == AnonymousUser {
+		return AnonymousSessionTTL
+	}
+	return SessionTTL
+}
+
 func (s *Store) CreateSession(username string) (string, error) {
 	token, err := randomToken()
 	if err != nil {
@@ -746,7 +793,7 @@ func (s *Store) CreateSession(username string) (string, error) {
 	_, err = s.pool.Exec(ctx, `
 		INSERT INTO hobby_server_session (id, username, created_at, expires_at, last_activity_at)
 		VALUES ($1, $2, $3, $4, $3)
-	`, token, username, now, now.Add(SessionTTL))
+	`, token, username, now, now.Add(sessionTTLFor(username)))
 	if err != nil {
 		return "", fmt.Errorf("insert session: %w", err)
 	}
@@ -786,7 +833,7 @@ func (s *Store) session(token string, touch bool) (string, bool) {
 		return "", false
 	}
 	newExpires := expiresAt
-	if expiresAt.Sub(now) < sessionRefreshThreshold {
+	if expiresAt.Sub(now) < sessionRefreshThreshold && username != AnonymousUser { // the anonymous session is never extended
 		newExpires = now.Add(SessionTTL)
 	}
 	_, _ = s.pool.Exec(ctx, `
@@ -841,6 +888,9 @@ func (s *Store) CreateToken(username, website, kind string, ttl time.Duration) (
 	// (Andrew, 2026-09-28: "don't allow me to send invite using that active
 	// site unless a role has been assigned"). Links and emails both mint
 	// here, so neither can skip it. A reset is for an account, not a site.
+	if username == AnonymousUser { // its password is public and must stay what the site signs in with
+		return "", time.Time{}, ErrAnonymousLocked
+	}
 	if kind == KindInvite {
 		ok, err := s.HasAnyRole(username, website)
 		if err != nil {
@@ -906,6 +956,12 @@ func (s *Store) ConsumeToken(code, passwordHash string) (username, website, kind
 		return "", "", "", false, nil
 	}
 	if err != nil {
+		return "", "", "", false, err
+	}
+	// A new password signs the account out everywhere: an old session
+	// (someone who had the old password) must not outlive it. The page
+	// that set it gets a fresh session right after (handleSetPassword).
+	if _, err := tx.Exec(ctx, `DELETE FROM hobby_server_session WHERE username = $1`, username); err != nil {
 		return "", "", "", false, err
 	}
 	// One password set voids every other open code for this account —

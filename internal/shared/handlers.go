@@ -134,6 +134,10 @@ func requestBase(r *http.Request) string {
 
 func handleLogin(store *Store, cookiePath string, secure bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if tooMany(w, r) {
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
 		var req struct {
 			Username string `json:"username"`
 			Password string `json:"password"`
@@ -146,7 +150,13 @@ func handleLogin(store *Store, cookiePath string, secure bool) http.HandlerFunc 
 			http.Error(w, "username and password required", http.StatusBadRequest)
 			return
 		}
-		acct, err := store.FindLogin(req.Username)   // a username or an email
+		// per account too, so guessing one person's password is slow from any number of addresses —
+		// but not the shared anonymous account, which everyone signs in to
+		if key := strings.ToLower(strings.TrimSpace(req.Username)); key != AnonymousUser && !accountAttempts.allow(key) {
+			http.Error(w, "too many attempts — try again in a few minutes", http.StatusTooManyRequests)
+			return
+		}
+		acct, err := store.FindLogin(req.Username) // a username or an email
 		if err != nil {
 			log.Printf("[admin] login lookup error: %v", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
@@ -245,6 +255,10 @@ func handleTokenInfo(store *Store) http.HandlerFunc {
 
 func handleSetPassword(store *Store, cookiePath string, secure bool, email *Email) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if tooMany(w, r) {
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
 		var req struct {
 			Code     string `json:"code"`
 			Password string `json:"password"`
@@ -311,6 +325,10 @@ var forgotSeen = struct {
 
 func handleForgot(store *Store, email *Email) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if tooMany(w, r) {
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
 		var req struct {
 			Username string `json:"username"`
 		}
@@ -327,7 +345,7 @@ func handleForgot(store *Store, email *Email) http.HandlerFunc {
 		}
 		forgotSeen.Unlock()
 		if !seen {
-			if acct, err := store.FindLogin(u); err == nil && acct != nil {   // a username or an email
+			if acct, err := store.FindLogin(u); err == nil && acct != nil { // a username or an email
 				go email.SendReset(store, email.base(r), acct)
 			}
 		}
@@ -536,7 +554,10 @@ func handleAddRole(store *Store) http.HandlerFunc {
 			http.Error(w, "username, website, role required", http.StatusBadRequest)
 			return
 		}
-		if err := store.AddRole(req.Username, req.Website, req.Role); err != nil {
+		if err := store.AddRole(req.Username, req.Website, req.Role); errors.Is(err, ErrAnonymousLocked) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		} else if err != nil {
 			// FK violations arrive here: unknown user, or a role that
 			// isn't registered for that website.
 			http.Error(w, "invalid user/website/role combination", http.StatusBadRequest)
@@ -625,6 +646,10 @@ func handleCreateLink(store *Store, email *Email) http.HandlerFunc {
 			http.Error(w, fmt.Sprintf("no role on %s: assign one before inviting", website), http.StatusConflict)
 			return
 		}
+		if errors.Is(err, ErrAnonymousLocked) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
 		if err != nil {
 			log.Printf("[admin] create token error: %v", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
@@ -708,6 +733,9 @@ func handleSendEmail(store *Store, email *Email) http.HandlerFunc {
 			return
 		case errors.Is(err, ErrNoRole):
 			http.Error(w, fmt.Sprintf("no role on %s: assign one before inviting", req.Website), http.StatusConflict)
+			return
+		case errors.Is(err, ErrAnonymousLocked):
+			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		case errors.Is(err, ErrNoTemplate):
 			http.Error(w, "no such template for that website", http.StatusNotFound)

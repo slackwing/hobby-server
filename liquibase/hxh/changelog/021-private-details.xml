@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        Private details (2026-09-28, security review): what only real
+        members may read — the party's address, for the Summons. The site
+        is public static files and this repo is public, so the values are
+        NEVER in a changeset or in the site's code: they are set by hand in
+        prod (INSERT INTO hxh_private (key, value) VALUES ('site', '…')).
+        Served by GET /hxh/api/db/private to members who are not the
+        anonymous viewer.
+    -->
+
+    <changeSet id="021-private-details" author="hxh">
+        <createTable tableName="hxh_private">
+            <column name="key" type="VARCHAR(40)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="value" type="TEXT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+    </changeSet>
+
+</databaseChangeLog>

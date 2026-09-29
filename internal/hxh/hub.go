@@ -593,7 +593,7 @@ func (c *Chat) HandleWS() http.HandlerFunc {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
-		if anon, err := c.auth.IsAnonymous(user, ChatWebsite); err != nil || anon {   // no socket for the anonymous viewer: no presence, no messages
+		if anon, err := c.auth.IsAnonymous(user, ChatWebsite); err != nil || anon { // no socket for the anonymous viewer: no presence, no messages
 			http.Error(w, "not in anonymous mode", http.StatusForbidden)
 			return
 		}
