@@ -409,6 +409,15 @@ func (c *Chat) requireMember(next http.Handler) http.Handler {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
+		// the anonymous viewer may open BeetleChat to look at it: an empty contact list, nothing else
+		if anon, err := c.auth.IsAnonymous(user, ChatWebsite); err != nil || anon {
+			if err == nil && r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/chat/contacts") {
+				writeJSON(w, http.StatusOK, map[string]any{"me": user, "contacts": []Contact{}, "anonymous": true})
+				return
+			}
+			http.Error(w, "not in anonymous mode", http.StatusForbidden)
+			return
+		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxUser, user)))
 	})
 }

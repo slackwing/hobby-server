@@ -1377,6 +1377,27 @@ func requireHxh(auth *shared.Store, admin bool) func(http.Handler) http.Handler 
 
 const ctxBot ctxKey = 2
 
+// refuseAnonymous: the anonymous viewer looks but does not act — its
+// hearts, bookmarks, claims and bug reports are refused here, whatever
+// its page might send (the password is public).
+func refuseAnonymous(auth *shared.Store) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			anon, err := auth.IsAnonymous(userOf(r), "hxh")
+			if err != nil {
+				log.Printf("[hxh] anonymous check error: %v", err)
+				http.Error(w, "internal error", http.StatusInternalServerError)
+				return
+			}
+			if anon {
+				http.Error(w, "not in anonymous mode", http.StatusForbidden)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // botOf says whether the request's user is a bot (the change log's
 // litmus: a bot's change needs review, a person's is self-approved).
 func botOf(r *http.Request) bool {
@@ -1411,7 +1432,7 @@ func MountRosterDB(r chi.Router, store *Store, auth *shared.Store) {
 			m.Get("/binder", handleBinder(store))
 			m.Get("/people", handlePeople(store))
 			m.Get("/stamps", handleStamps(store))
-			m.Post("/chars/{id}/stamp", handleStamp(store, auth))
+			m.With(refuseAnonymous(auth)).Post("/chars/{id}/stamp", handleStamp(store, auth))
 			m.Get("/images/{id}", handleImageData(store, false))
 			m.Get("/images/{id}/thumb", handleImageData(store, true))
 		})

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        Anonymous viewing (2026-09-28, Andrew): "View site anonymously"
+        on the hxh logon signs in as the shared account anonymous /
+        anonymous (the password is PUBLIC — it is printed nowhere but
+        the site signs in with it). Its role "anonymous" on hxh lets it
+        look but not act: the server refuses its stamps (heart,
+        bookmark, claim), bug reports, chat socket, chat history,
+        profile and picture uploads, and never lists it as a member
+        (ListMembers skips an account whose only role there is
+        anonymous). The hash below is argon2id of "anonymous".
+    -->
+
+    <changeSet id="008-anonymous" author="admin">
+        <insert tableName="hobby_server_website_roles">
+            <column name="website" value="hxh"/>
+            <column name="role" value="anonymous"/>
+        </insert>
+        <sql>
+            INSERT INTO hobby_server_user (username, display_name, initial, color, active_site, password_hash, activated_at)
+            VALUES ('anonymous', 'Anonymous', '?', '#8a8a8a', 'hxh',
+                    '$argon2id$v=19$m=19456,t=2,p=1$sEiBKs3JEqLRkSOXZ0IXQg$NQDLB+pWTw61YcAe6smnHI62vNrPu37FAQNgaZ/6rZw', NOW())
+            ON CONFLICT (username) DO NOTHING;
+            INSERT INTO hobby_server_user_roles (username, website, role) VALUES ('anonymous', 'hxh', 'anonymous')
+            ON CONFLICT DO NOTHING;
+        </sql>
+    </changeSet>
+
+</databaseChangeLog>

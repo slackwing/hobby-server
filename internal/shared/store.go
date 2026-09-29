@@ -477,7 +477,7 @@ func (s *Store) ListMembers(website string) ([]Member, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT u.username, u.display_name, u.initial, u.color, u.password_hash IS NOT NULL, u.is_bot, u.last_seen_at, u.activated_at
 		FROM hobby_server_user u
-		WHERE EXISTS (SELECT 1 FROM hobby_server_user_roles r WHERE r.username = u.username AND r.website = $1)
+		WHERE EXISTS (SELECT 1 FROM hobby_server_user_roles r WHERE r.username = u.username AND r.website = $1 AND r.role <> 'anonymous')
 		ORDER BY LOWER(u.display_name), u.username
 	`, website)
 	if err != nil {
@@ -506,6 +506,24 @@ func (s *Store) IsBot(username string) (bool, error) {
 		return false, nil
 	}
 	return bot, err
+}
+
+// RoleAnonymous is a look-don't-touch role: the shared "View site
+// anonymously" account holds it (changeset 008). Sites let it read and
+// refuse its actions; ListMembers never lists it.
+const RoleAnonymous = "anonymous"
+
+// IsAnonymous: the user's only roles on the website are RoleAnonymous
+// (someone who also holds a real role there is not held back).
+func (s *Store) IsAnonymous(username, website string) (bool, error) {
+	ctx, cancel := withCtx()
+	defer cancel()
+	var anon, other int
+	err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FILTER (WHERE role = 'anonymous'), COUNT(*) FILTER (WHERE role <> 'anonymous')
+		FROM hobby_server_user_roles WHERE username = $1 AND website = $2
+	`, username, website).Scan(&anon, &other)
+	return anon > 0 && other == 0, err
 }
 
 func (s *Store) IsMember(username, website string) (bool, error) {

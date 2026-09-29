@@ -28,6 +28,13 @@ before wiring a new project; the implementation lives in
   and `/admin/api/forgot` take either in `username` (`Store.FindLogin`);
   an address matches case-insensitively, and only when exactly one
   account has it.
+- **Anonymous viewing** (2026-09-28): role `anonymous` (changeset 008)
+  is look-don't-touch. The shared account `anonymous` / `anonymous`
+  (a PUBLIC password — the hxh logon's "View site anonymously" signs in
+  with it) holds it on hxh. `Store.IsAnonymous(user, site)` is true when
+  every role there is anonymous; sites must refuse such a user's actions
+  server-side (hxh: stamps, bug reports, chat socket/history/profile/
+  images → 403, empty contacts), and `ListMembers` never lists it.
 - **One SSO session**: cookie `hobby_session`, `Path=/`, HttpOnly,
   30-day sliding. Log in on any site → logged in on all. A site
   decides access by looking at the user's roles, not by having its own

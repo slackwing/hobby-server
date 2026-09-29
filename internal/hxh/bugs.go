@@ -166,7 +166,7 @@ func (s *Store) SetBugStatus(id int64, status, by, note string) (BugReport, erro
 // MountBugs wires /bugs: reporting for any member, the rest for admins.
 func MountBugs(r chi.Router, store *Store, auth *shared.Store) {
 	r.Route("/bugs", func(g chi.Router) {
-		g.With(requireHxh(auth, false)).Post("/", handleNewBug(store))
+		g.With(requireHxh(auth, false), refuseAnonymous(auth)).Post("/", handleNewBug(store))
 		g.Group(func(a chi.Router) {
 			a.Use(requireHxh(auth, true))
 			a.Get("/", handleListBugs(store))
