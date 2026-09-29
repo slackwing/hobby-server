@@ -529,7 +529,7 @@ const RoleAnonymous = "anonymous"
 const AnonymousUser = "anonymous"
 
 // ErrAnonymousLocked: an attempt to give the anonymous account more than it has.
-var ErrAnonymousLocked = errors.New("the anonymous account cannot be given roles or links")
+var ErrAnonymousLocked = errors.New("the anonymous account is locked: no other roles, no links, never a bot")
 
 // IsAnonymous: the user's only roles on the website are RoleAnonymous
 // (someone who also holds a real role there is not held back).
@@ -609,6 +609,19 @@ func (s *Store) DeleteUser(username string) (bool, error) {
 	tag, err := s.pool.Exec(ctx, `
 		DELETE FROM hobby_server_user WHERE username = $1
 	`, username)
+	return tag.RowsAffected() > 0, err
+}
+
+// SetBot marks an account a bot (listed apart, driven by bot programs) or a
+// person again. The public anonymous account is never a bot: a bot
+// program would sign in as it.
+func (s *Store) SetBot(username string, bot bool) (bool, error) {
+	if username == AnonymousUser && bot {
+		return false, ErrAnonymousLocked
+	}
+	ctx, cancel := withCtx()
+	defer cancel()
+	tag, err := s.pool.Exec(ctx, `UPDATE hobby_server_user SET is_bot = $1 WHERE username = $2`, bot, username)
 	return tag.RowsAffected() > 0, err
 }
 

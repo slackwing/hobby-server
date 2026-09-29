@@ -290,11 +290,11 @@ func (c *ChatBots) session(ctx context.Context, st *botState) (*Session, error) 
 		return sess, nil
 	}
 	sess, err := c.site.Login(ctx, user, c.cfg.Password)
-	if err == ErrUnauthorized && c.cfg.Password != "" {
-		// the configured password changed under a provisioned account: re-provision once
-		if h, herr := shared.HashPassword(c.cfg.Password); herr == nil && c.store.SetPasswordDirect(user, h) == nil {
-			sess, err = c.site.Login(ctx, user, c.cfg.Password)
-		}
+	// A refused login is NOT fixed by overwriting the password: an account the admin marked a bot may be a
+	// person's (the console can now flip is_bot), and resetting it would lock them out and hand the account to
+	// whoever knows the bot password. Only a bot with NO password is provisioned (see the roster sync above).
+	if err == ErrUnauthorized {
+		c.logf("[bots] %s refused the bot password; left alone (set its password by hand to drive it)", user)
 	}
 	if err != nil {
 		return nil, err

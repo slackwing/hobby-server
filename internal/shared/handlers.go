@@ -374,6 +374,7 @@ type userReq struct {
 	Color       *string `json:"color"`
 	Email       *string `json:"email"`
 	ActiveSite  *string `json:"active_site"`
+	IsBot       *bool   `json:"is_bot"` // PATCH only: mark an account a bot, or a person again (Andrew, 2026-09-29)
 }
 
 // validateProfile trims and checks whichever profile fields are
@@ -484,9 +485,25 @@ func handlePatchUser(store *Store) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if len(fields) == 0 {
+		if len(fields) == 0 && req.IsBot == nil {
 			http.Error(w, "nothing to update", http.StatusBadRequest)
 			return
+		}
+		if req.IsBot != nil {
+			found, err := store.SetBot(username, *req.IsBot)
+			if errors.Is(err, ErrAnonymousLocked) {
+				http.Error(w, err.Error(), http.StatusConflict)
+				return
+			}
+			if err != nil {
+				log.Printf("[admin] set bot error: %v", err)
+				http.Error(w, "internal error", http.StatusInternalServerError)
+				return
+			}
+			if !found {
+				http.Error(w, "no such user", http.StatusNotFound)
+				return
+			}
 		}
 		found, err := store.UpdateUser(username, fields)
 		if err != nil {

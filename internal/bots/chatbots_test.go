@@ -412,7 +412,7 @@ func TestOnePendingSpeechPerBot(t *testing.T) {
 	h.settle()
 }
 
-func TestProvisioningAndRelogin(t *testing.T) {
+func TestProvisioningNeverOverwrites(t *testing.T) {
 	h := newHarness(bot("newbie", 0.5, false))
 	h.c.Tick(context.Background())
 	h.settle()
@@ -420,14 +420,15 @@ func TestProvisioningAndRelogin(t *testing.T) {
 	if hash == "" || !shared.VerifyPassword("beetle-pass", hash) {
 		t.Fatal("a bot without a password gets the configured one, argon2-hashed")
 	}
-	// a stale hash (password changed in config): login 401 → re-provision → retry
+	// an account that already has a password and refuses the bot one is LEFT ALONE: it may be a person the admin
+	// marked a bot (2026-09-29) — overwriting would lock them out and hand the account to whoever has the bot password
 	h2 := newHarness(bot("alyosha", 1, true))
 	h2.site.reject = true
 	h2.roll(0, 0, 0.99, 0)
 	h2.c.Tick(context.Background())
 	h2.settle()
-	if len(h2.site.logins) != 2 || h2.store.provisioned["alyosha"] == "" {
-		t.Fatalf("expected login, re-provision, login again; got logins %v", h2.site.logins)
+	if len(h2.site.logins) != 1 || h2.store.provisioned["alyosha"] != "" {
+		t.Fatalf("expected one refused login and no password change; got logins %v, provisioned %q", h2.site.logins, h2.store.provisioned["alyosha"])
 	}
 }
 

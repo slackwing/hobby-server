@@ -43,6 +43,11 @@ before wiring a new project; the implementation lives in
   always anonymous, `HasRole` false for anything but `anonymous`,
   `AddRole` and `CreateToken` refuse it (409), never listed; its
   sessions last 12 h and are never extended.
+- **Bots** (2026-09-29): `PATCH /admin/api/users/{u}` takes `is_bot`
+  (the console's ⋯ › Mark as bot / Mark as person; never for
+  `anonymous`). A bot program only ever provisions a password for a bot
+  that has NONE; a bot that refuses the bot password is left alone (it
+  may be a person marked a bot — overwriting would lock them out).
 - **Brute-force limits**: login, forgot and set-password are throttled
   per client address (20 / 5 min, the last X-Forwarded-For hop) and
   logins per account (10 / 15 min, not the anonymous one) → 429; bodies
