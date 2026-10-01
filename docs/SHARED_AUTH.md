@@ -295,6 +295,8 @@ it the console says "email not configured" and sends 503.
 authenticated request through `Store.GetSession`, on any website, at
 most once per 20 s per user — and `activated_at`, set the first time
 an account gets a password (`ConsumeToken`). hxh's chat derives
-presence tiers from the former and message visibility from the latter
-(`Store.ListMembers(website)`, `IsMember`, `TouchLastSeen`). Other
+presence tiers from the former and DM visibility from the latter — a
+DM shows only what was said after you joined; Global chat shows its
+whole past (2026-10-01) (`Store.ListMembers(website)`, `IsMember`,
+`TouchLastSeen`). Other
 sites may read them the same way; nothing else writes them.

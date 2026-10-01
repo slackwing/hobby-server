@@ -205,8 +205,9 @@ func (s *Store) MarkRead(user, room string, id int64) error {
 }
 
 // Unread counts, per room `user` belongs to (global and their DMs), the
-// messages by others written after `after` (the viewer's activation, as
-// History) and past the user's read marker. Rooms with nothing unread
+// messages by others past the user's read marker — in a DM only those
+// written after `after` (the viewer's activation, as History); Global
+// chat counts from its beginning (2026-10-01). Rooms with nothing unread
 // are absent. Oldest room first, so windows open in arrival order.
 func (s *Store) Unread(user string, after time.Time) ([]RoomUnread, error) {
 	ctx, cancel := withCtx()
@@ -216,7 +217,7 @@ func (s *Store) Unread(user string, after time.Time) ([]RoomUnread, error) {
 		FROM hxh_chat_message m
 		LEFT JOIN hxh_chat_read r ON r.username = $1 AND r.room = m.room
 		WHERE (m.room = 'global' OR split_part(m.room, ':', 2) = $1 OR split_part(m.room, ':', 3) = $1)
-		  AND m.sender <> $1 AND m.deleted_at IS NULL AND m.created_at > $2
+		  AND m.sender <> $1 AND m.deleted_at IS NULL AND (m.room = 'global' OR m.created_at > $2)
 		  AND m.id > COALESCE(r.last_read_id, 0)
 		GROUP BY m.room ORDER BY MAX(m.id)
 	`, user, after)
@@ -236,7 +237,8 @@ func (s *Store) Unread(user string, after time.Time) ([]RoomUnread, error) {
 }
 
 // History returns the newest `limit` messages of a room written after
-// `after` (the viewer's activation — item 13), oldest first. deleted_at
+// `after` (the viewer's activation for a DM — item 13; zero for Global
+// chat, which shows its whole past since 2026-10-01), oldest first. deleted_at
 // is a landed column (unsend was dropped 2026-09-18 as anachronistic —
 // Andrew); nothing sets it any more.
 func (s *Store) History(room string, after time.Time, limit int) ([]Message, error) {
@@ -547,8 +549,10 @@ func (c *Chat) handleHistory(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	// Global chat shows everything, from before you joined too (Andrew, 2026-10-01: "they should be able to see
+	// all global chats even ones that happened before they joined"); a DM still starts at your activation.
 	var after time.Time
-	if acct.ActivatedAt != nil {
+	if acct.ActivatedAt != nil && room != RoomGlobal {
 		after = *acct.ActivatedAt
 	}
 	msgs, err := c.store.History(room, after, HistoryLimit)
