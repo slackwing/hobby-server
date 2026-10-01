@@ -43,6 +43,20 @@ before wiring a new project; the implementation lives in
   always anonymous, `HasRole` false for anything but `anonymous`,
   `AddRole` and `CreateToken` refuse it (409), never listed; its
   sessions last 12 h and are never extended.
+- **Site consoles** (2026-10-01): `/<site>/_admin/` runs the SAME console
+  as `/admin/` (`/admin/assets/console.js`, `Console.mount({ site })`),
+  against `/admin/api/site/{site}/…` (`siteadmin.go`), open to the site's
+  admins and global admins. A site admin changes only people WHOLLY
+  within the site (every role on it, or none yet with it as active
+  site; never bots or anonymous) — anyone reaching beyond it (a global
+  admin, someone on another site) is `editable: false`, because email
+  edits and reset links are account takeover. No deletes, no bots, no
+  active site, no removing your own admin role. Each site write checks,
+  then delegates to the global handler with the website forced. The
+  add-user form: Name → username (derived) → Email, all required; a
+  site console then adds the site's **default role** (changeset 009,
+  `hobby_server_website_roles.is_default`, one per site: hxh guest, bap
+  player) and sends the invite; `/admin/` only creates.
 - **Bots** (2026-09-29): `PATCH /admin/api/users/{u}` takes `is_bot`
   (the console's ⋯ › Mark as bot / Mark as person; never for
   `anonymous`). A bot program only ever provisions a password for a bot

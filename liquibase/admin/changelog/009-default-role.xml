@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        Default roles (2026-10-01, Andrew): each website may mark ONE of
+        its roles as the default — the role a new user gets when the
+        console's add-user flow creates them for that site (create, add
+        the default role, send the invite). hxh → guest, bap → player.
+    -->
+
+    <changeSet id="009-default-role" author="admin">
+        <addColumn tableName="hobby_server_website_roles">
+            <column name="is_default" type="BOOLEAN" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+        <sql>
+            CREATE UNIQUE INDEX hobby_server_website_roles_one_default ON hobby_server_website_roles (website) WHERE is_default;
+            UPDATE hobby_server_website_roles SET is_default = true WHERE (website, role) IN (('hxh', 'guest'), ('bap', 'player'));
+        </sql>
+    </changeSet>
+
+</databaseChangeLog>

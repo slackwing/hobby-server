@@ -31,6 +31,9 @@ func Mount(r chi.Router, store *Store, cookiePath string, secure bool, email *Em
 	r.Post("/set-password", handleSetPassword(store, cookiePath, secure, email))
 	r.Post("/forgot", handleForgot(store, email))
 
+	// One website's console (/<site>/_admin): its admins, scoped to it (siteadmin.go).
+	mountSiteAdmin(r, store, email)
+
 	// Admin-only: requires role "admin" on website "admin".
 	r.Group(func(g chi.Router) {
 		g.Use(RequireAdmin(store))

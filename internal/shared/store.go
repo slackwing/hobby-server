@@ -217,6 +217,7 @@ type Member struct {
 type Website struct {
 	Website string   `json:"website"`
 	Roles   []string `json:"roles"`
+	Default string   `json:"default"` // the role a new user gets on this site ("" = none); changeset 009
 }
 
 type Store struct {
@@ -757,7 +758,7 @@ func (s *Store) ListWebsites() ([]Website, error) {
 		byName[sites[i].Website] = &sites[i]
 	}
 	rrows, err := s.pool.Query(ctx, `
-		SELECT website, role FROM hobby_server_website_roles ORDER BY website, role
+		SELECT website, role, is_default FROM hobby_server_website_roles ORDER BY website, role
 	`)
 	if err != nil {
 		return nil, err
@@ -765,11 +766,15 @@ func (s *Store) ListWebsites() ([]Website, error) {
 	defer rrows.Close()
 	for rrows.Next() {
 		var website, role string
-		if err := rrows.Scan(&website, &role); err != nil {
+		var def bool
+		if err := rrows.Scan(&website, &role, &def); err != nil {
 			return nil, err
 		}
 		if w, ok := byName[website]; ok {
 			w.Roles = append(w.Roles, role)
+			if def {
+				w.Default = role
+			}
 		}
 	}
 	return sites, rrows.Err()
