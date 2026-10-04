@@ -361,7 +361,7 @@ func (c *ChatBots) speak(ctx context.Context, st *botState, room string, replyTo
 		room = c.pickRoom(user, contacts)
 	}
 	if other := hxh.DMPartner(user, room); other != "" && !reachable(contacts, other) {
-		// the hub would refuse it anyway (error "offline"); a bot just lets them be
+		// the hub would take it, but a bot only talks to someone there — the absent come back to global, not to a pile of bot DMs
 		c.logf("[bots] %s lets %s be (offline)", user, other)
 		return
 	}
@@ -408,8 +408,9 @@ func (c *ChatBots) speak(ctx context.Context, st *botState, room string, replyTo
 	conn.Close()
 }
 
-// reachable: may this contact be messaged? Online or away — not
-// offline, not without a password (Andrew, 2026-09-19).
+// reachable: will a bot message this contact? Online or away — not
+// offline, not without a password (Andrew, 2026-09-19). People may DM
+// the offline since 2026-10-04; bots still don't.
 func reachable(contacts []Contact, user string) bool {
 	for _, ct := range contacts {
 		if ct.Username == user {

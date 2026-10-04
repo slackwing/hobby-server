@@ -69,14 +69,14 @@ func (s *memStore) MarkRead(user, room string, id int64) error {
 	return nil
 }
 
-// Unread mirrors the SQL: others' messages after `after`, past the marker, in rooms of mine; oldest room first.
-func (s *memStore) Unread(user string, after time.Time) ([]RoomUnread, error) {
+// Unread mirrors the SQL: others' messages past the marker, in rooms of mine; oldest room first.
+func (s *memStore) Unread(user string) ([]RoomUnread, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	agg := map[string]*RoomUnread{}
 	var order []string
 	for _, m := range s.msgs {
-		if m.Sender == user || !m.CreatedAt.After(after) || (m.Room != RoomGlobal && DMPartner(user, m.Room) == "") {
+		if m.Sender == user || (m.Room != RoomGlobal && DMPartner(user, m.Room) == "") {
 			continue
 		}
 		if m.ID <= s.reads[user+"|"+m.Room] {
@@ -383,7 +383,7 @@ func TestHelloCarriesUnreadAndReadsAreSharedAcrossTabs(t *testing.T) {
 	none(t, abi)
 	// markers never move backwards; foreign rooms and bad ids are refused
 	frame(tab2, map[string]any{"t": "read", "room": dm, "id": 1})
-	u, _ := store.Unread("andrew", time.Time{})
+	u, _ := store.Unread("andrew")
 	if len(u) != 0 {
 		t.Fatalf("still read after a stale marker, got %v", u)
 	}
@@ -398,44 +398,24 @@ func TestHelloCarriesUnreadAndReadsAreSharedAcrossTabs(t *testing.T) {
 	}
 }
 
-func TestDMNeedsAReachablePartner(t *testing.T) {
+func TestDMReachesTheOffline(t *testing.T) {
 	h, _, members, now := newTestHub()
 	andrew := h.add("andrew")
-	h.refreshPresence() // abi never seen: offline, and so never recorded
+	h.refreshPresence() // abi never seen: offline
 	drain(andrew)
-	room := DMRoom("andrew", "abi")
-	say := func() map[string]any {
-		frame(andrew, map[string]any{"t": "msg", "room": room, "body": "psst"})
-		return next(t, andrew)
+	for _, other := range []string{"abi", "newbie"} { // offline, and no password yet
+		frame(andrew, map[string]any{"t": "msg", "room": DMRoom("andrew", other), "body": "psst"})
+		if m := next(t, andrew); m["t"] != "msg" {
+			t.Fatalf("a DM to %s is taken, got %v", other, m)
+		}
 	}
-	if e := say(); e["t"] != "error" || e["code"] != "offline" {
-		t.Fatalf("offline partner refused, got %v", e)
-	}
-	members.seen("abi", now.Add(-30*time.Minute)) // away
-	h.refreshPresence()
-	drain(andrew)
-	if m := say(); m["t"] != "msg" {
-		t.Fatalf("away partner reachable, got %v", m)
-	}
-	*now = now.Add(2 * time.Hour) // abi drifts offline
-	h.refreshPresence()
-	drain(andrew)
-	if e := say(); e["code"] != "offline" {
-		t.Fatalf("offline again, got %v", e)
-	}
-	abi := h.add("abi") // connected: an instance open — reachable at once, before any refresh
-	drain(andrew, abi)
-	if m := say(); m["t"] != "msg" {
-		t.Fatalf("connected partner reachable, got %v", m)
-	}
-	drain(abi)
-	frame(andrew, map[string]any{"t": "msg", "room": DMRoom("andrew", "newbie"), "body": "hi"})
-	if e := next(t, andrew); e["code"] != "offline" {
-		t.Fatalf("no password = unreachable, got %v", e)
-	}
-	frame(andrew, map[string]any{"t": "msg", "room": RoomGlobal, "body": "all"})
-	if m := next(t, andrew); m["t"] != "msg" {
-		t.Fatalf("global needs nobody, got %v", m)
+	// the newbie sets a password and launches later: the DM is there, unread — nothing hides what came before joining
+	*now = now.Add(time.Hour)
+	activated := *now
+	members.members[2].HasPassword, members.members[2].ActivatedAt = true, &activated
+	newbie := h.add("newbie")
+	if got, want := unreadOf(next(t, newbie)), DMRoom("andrew", "newbie")+":1@"; !strings.HasPrefix(got, want) {
+		t.Fatalf("hello unread = %q, want %s…", got, want)
 	}
 }
 

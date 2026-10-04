@@ -15,10 +15,10 @@
 //	                 {"t":"read","room":R,"id":N}  (to the user's OTHER tabs)
 //	                 {"t":"pong"}  {"t":"error","code":C,"room":R}
 //
-// Error codes: room (not yours), body, rate, server, bad, image (a picture
-// that is not yours, already sent, or missing), and offline —
-// a DM to someone neither online nor away is refused (Andrew,
-// 2026-09-19: "you can message online and away people, but not offline").
+// Error codes: room (not yours), body, rate, server, bad, and image (a
+// picture that is not yours, already sent, or missing). A DM reaches
+// anyone, offline or not — it waits as unread (Andrew, 2026-10-04: "allow
+// offline messages"; until then only the online and the away).
 //
 // Presence tiers (spec item 16, reworked 2026-09-21 — Andrew: an instance
 // open in a background tab must stay AWAY, never offline, and must not
@@ -59,7 +59,7 @@ type chatStore interface {
 	InsertMessage(room, sender, body string, imageID int64) (Message, error)
 	ImageOwnedFree(id int64, user string) (bool, error)
 	MarkRead(user, room string, id int64) error
-	Unread(user string, after time.Time) ([]RoomUnread, error)
+	Unread(user string) ([]RoomUnread, error)
 }
 
 type memberSource interface {
@@ -279,22 +279,6 @@ func (h *Hub) AnnounceContacts() {
 	h.broadcastAll(map[string]any{"t": "contacts", "contacts": contacts})
 }
 
-// reachable: may `user` be messaged right now? Online or away — not
-// offline, not without a password (Andrew, 2026-09-19: "you can message
-// online and away people, but not offline"). A live connection counts
-// before the next presence refresh; a member never announced since the
-// server started is offline by construction (refreshPresence records
-// only the present).
-func (h *Hub) reachable(user string) bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.open(user, h.now()) {
-		return true
-	}
-	st := h.states[user]
-	return st == "online" || st == "away"
-}
-
 // baseline is the state a never-announced user is assumed to have been
 // in: someone present now is announced (they were "offline" to everyone),
 // someone absent is just recorded.
@@ -385,20 +369,10 @@ func (h *Hub) add(user string) *hubClient {
 	}
 	contacts := h.contactsOf(members)
 	unread := []RoomUnread{}
-	for _, m := range members {
-		if m.Username != user {
-			continue
-		}
-		var after time.Time
-		if m.ActivatedAt != nil {
-			after = *m.ActivatedAt
-		}
-		if u, err := h.store.Unread(user, after); err != nil {
-			log.Printf("[hxh chat] hello unread error: %v", err)
-		} else if u != nil {
-			unread = u
-		}
-		break
+	if u, err := h.store.Unread(user); err != nil {
+		log.Printf("[hxh chat] hello unread error: %v", err)
+	} else if u != nil {
+		unread = u
 	}
 	c.sendJSON(map[string]any{"t": "hello", "me": user, "contacts": contacts, "unread": unread})
 	h.announce(user)
@@ -540,10 +514,6 @@ func (h *Hub) handle(c *hubClient, data []byte) {
 	case "msg":
 		if !canUseRoom(c.user, f.Room) {
 			c.fail("room", f.Room)
-			return
-		}
-		if other := DMPartner(c.user, f.Room); other != "" && !h.reachable(other) {
-			c.fail("offline", f.Room)
 			return
 		}
 		h.members.TouchLastSeen(c.user)
