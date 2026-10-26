@@ -7,7 +7,8 @@ package sxiva
 //   - rolling windows count ROWS (a day with no file is not a row), except
 //     hobby_weighted, whose window is calendar days;
 //   - work is the last 5 WEEKDAY rows, whatever the window;
-//   - meet (meeting minutes) counts as work and total, never other.
+//   - meet (meeting minutes) counts as work and total, never other;
+//   - study works like hobby (row sums, calendar-weighted "feels like").
 
 import (
 	"math"
@@ -29,11 +30,18 @@ type Day struct {
 	CategoryMinutes map[string]int64
 	Meet            *int64
 	Alc             *float64 // NUMERIC(2,1)
+	Exe             *float64 // NUMERIC(2,1): exercise, in half steps
 	DepAvg          *float64 // NUMERIC(2,1): the day's mood
 	SleepScore      *int64
 	DRCTriggers     *float64
 	DRCResisted     *float64
 	DRCIndulged     *float64
+}
+
+// Groups are the category codes the dashboard asks about. A code may sit
+// in more than one group; a code in none of them is "other".
+type Groups struct {
+	Hobby, Work, Study []string
 }
 
 // CategoryRow is one day of GET /category-rolling-sum.
@@ -43,6 +51,8 @@ type CategoryRow struct {
 	HobbyWeighted float64 `json:"hobby_weighted"`
 	WorkRaw       int64   `json:"work_raw"`
 	WorkWeighted  float64 `json:"work_weighted"`
+	StudyRaw      int64   `json:"study_raw"`
+	StudyWeighted float64 `json:"study_weighted"`
 	OtherRaw      int64   `json:"other_raw"`
 	TotalRaw      int64   `json:"total_raw"`
 }
@@ -72,19 +82,20 @@ type DRCRow struct {
 }
 
 // RollingCategory computes, per day:
-//   - hobby_raw / other_raw / total_raw: sums over the current row and the
-//     window-1 rows before it;
-//   - hobby_weighted: over the rows within the last `window` CALENDAR days,
+//   - hobby_raw / study_raw / other_raw / total_raw: sums over the current
+//     row and the window-1 rows before it;
+//   - hobby_weighted / study_weighted: over the rows within the last
+//     `window` CALENDAR days,
 //     Σ minutes·w / Σ w · window with w = e^(−λ·age in days) — the "feels
 //     like" figure, recent days counting more;
 //   - work_raw / work_weighted: the same over the last 5 weekday rows up
 //     to the current day (· 5 instead of · window); 0 before any weekday.
 //
 // days must be sorted by date, ascending; window ≥ 1.
-func RollingCategory(days []Day, hobby, work []string, window int, lambda float64) []CategoryRow {
-	inHobby, inWork := setOf(hobby), setOf(work)
+func RollingCategory(days []Day, groups Groups, window int, lambda float64) []CategoryRow {
+	inHobby, inWork, inStudy := setOf(groups.Hobby), setOf(groups.Work), setOf(groups.Study)
 	n := len(days)
-	hob, wrk, oth, tot := make([]int64, n), make([]int64, n), make([]int64, n), make([]int64, n)
+	hob, wrk, stu, oth, tot := make([]int64, n), make([]int64, n), make([]int64, n), make([]int64, n), make([]int64, n)
 	for i, d := range days {
 		for k, v := range d.CategoryMinutes {
 			if inHobby[k] {
@@ -93,7 +104,10 @@ func RollingCategory(days []Day, hobby, work []string, window int, lambda float6
 			if inWork[k] {
 				wrk[i] += v
 			}
-			if !inHobby[k] && !inWork[k] {
+			if inStudy[k] {
+				stu[i] += v
+			}
+			if !inHobby[k] && !inWork[k] && !inStudy[k] {
 				oth[i] += v
 			}
 			tot[i] += v
@@ -114,6 +128,7 @@ func RollingCategory(days []Day, hobby, work []string, window int, lambda float6
 
 		for j := max(0, i-window+1); j <= i; j++ {
 			row.HobbyRaw += hob[j]
+			row.StudyRaw += stu[j]
 			row.OtherRaw += oth[j]
 			row.TotalRaw += tot[j]
 		}
@@ -122,13 +137,15 @@ func RollingCategory(days []Day, hobby, work []string, window int, lambda float6
 		for first > 0 && ageDays(d.Date, days[first-1].Date) < int64(window) {
 			first--
 		}
-		var sumHW, sumW float64
+		var sumHW, sumSW, sumW float64
 		for j := first; j <= i; j++ {
 			w := math.Exp(-lambda * float64(ageDays(d.Date, days[j].Date)))
 			sumHW += float64(hob[j]) * w
+			sumSW += float64(stu[j]) * w
 			sumW += w
 		}
 		row.HobbyWeighted = roundPG(sumHW*(float64(window)/sumW), 1)
+		row.StudyWeighted = roundPG(sumSW*(float64(window)/sumW), 1)
 
 		if last := weekdays[max(0, len(weekdays)-workDays):]; len(last) > 0 {
 			var sumWW, sumW float64
@@ -224,9 +241,14 @@ func DRC(days []Day) []DRCRow {
 	return out
 }
 
-// Categories returns every category code that occurs in the data, sorted,
-// split into the requested hobby and work codes and everything else.
-func Categories(days []Day, hobby, work []string) (hobbyCats, workCats, otherCats []string) {
+// CategoryLists is every category code that occurs in the data, sorted,
+// split by group ("other" = in no group).
+type CategoryLists struct {
+	Hobby, Work, Study, Other []string
+}
+
+// Categories splits the codes that occur in the data by group.
+func Categories(days []Day, groups Groups) CategoryLists {
 	seen := map[string]bool{}
 	for _, d := range days {
 		for k := range d.CategoryMinutes {
@@ -238,20 +260,23 @@ func Categories(days []Day, hobby, work []string) (hobbyCats, workCats, otherCat
 		all = append(all, k)
 	}
 	sort.Strings(all)
-	inHobby, inWork := setOf(hobby), setOf(work)
-	hobbyCats, workCats, otherCats = []string{}, []string{}, []string{}
+	inHobby, inWork, inStudy := setOf(groups.Hobby), setOf(groups.Work), setOf(groups.Study)
+	out := CategoryLists{Hobby: []string{}, Work: []string{}, Study: []string{}, Other: []string{}}
 	for _, k := range all {
 		if inHobby[k] {
-			hobbyCats = append(hobbyCats, k)
+			out.Hobby = append(out.Hobby, k)
 		}
 		if inWork[k] {
-			workCats = append(workCats, k)
+			out.Work = append(out.Work, k)
 		}
-		if !inHobby[k] && !inWork[k] {
-			otherCats = append(otherCats, k)
+		if inStudy[k] {
+			out.Study = append(out.Study, k)
+		}
+		if !inHobby[k] && !inWork[k] && !inStudy[k] {
+			out.Other = append(out.Other, k)
 		}
 	}
-	return hobbyCats, workCats, otherCats
+	return out
 }
 
 // roundPG rounds the way the old SQL did (float8 → numeric → ROUND(x, n)):

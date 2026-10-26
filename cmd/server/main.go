@@ -133,8 +133,8 @@ func main() {
 			p := p
 			sxivaProject = &p
 			sxivaPool = pool
-			log.Printf("project %q ready (data only): db=%s url_prefix=%s auth=token(configured=%v)",
-				p.Name, p.Database.Name, p.URLPrefix, p.SyncToken != "")
+			log.Printf("project %q ready (data only): db=%s url_prefix=%s auth=token(configured=%v) manuscripts=%v",
+				p.Name, p.Database.Name, p.URLPrefix, p.SyncToken != "", p.Manuscripts.BaseURL != "" && p.Manuscripts.Token != "")
 			continue
 		}
 		states = append(states, projectState{
@@ -319,7 +319,8 @@ func main() {
 		// sxiva needs no shared auth, so unlike hxh/bap it mounts without it.
 		if sxivaProject != nil {
 			r.Route(sxivaProject.URLPrefix, func(sub chi.Router) {
-				sxiva.Mount(sub, sxiva.NewStore(sxivaPool), sxivaProject.SyncToken)
+				sxiva.Mount(sub, sxiva.NewStore(sxivaPool), sxivaProject.SyncToken,
+					sxiva.NewWritingSource(sxivaProject.Manuscripts.BaseURL, sxivaProject.Manuscripts.Token))
 			})
 		}
 

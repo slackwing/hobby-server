@@ -51,7 +51,7 @@ func (s *Store) Days() ([]Day, error) {
 	ctx, cancel := withCtx()
 	defer cancel()
 	rows, err := s.pool.Query(ctx, `
-		SELECT date, category_minutes, meet, alc, dep_avg, sleep_score,
+		SELECT date, category_minutes, meet, alc, exe, dep_avg, sleep_score,
 		       drc_triggers, drc_resisted, drc_indulged
 		FROM sxiva_daily_summary
 		ORDER BY date
@@ -64,7 +64,7 @@ func (s *Store) Days() ([]Day, error) {
 	for rows.Next() {
 		var d Day
 		var cats []byte
-		if err := rows.Scan(&d.Date, &cats, &d.Meet, &d.Alc, &d.DepAvg, &d.SleepScore,
+		if err := rows.Scan(&d.Date, &cats, &d.Meet, &d.Alc, &d.Exe, &d.DepAvg, &d.SleepScore,
 			&d.DRCTriggers, &d.DRCResisted, &d.DRCIndulged); err != nil {
 			return nil, err
 		}
@@ -200,9 +200,11 @@ func (s *Store) Ping() error {
 	return err
 }
 
-// Mount wires the sxiva endpoints. token gates the CLI's two endpoints.
-func Mount(r chi.Router, store *Store, token string) {
+// Mount wires the sxiva endpoints. token gates the CLI's two endpoints;
+// writing (nil = not configured) feeds the Sabbatical '27 writing squares.
+func Mount(r chi.Router, store *Store, token string, writing *WritingSource) {
 	r.Get("/health", handleHealth(store))
+	r.Get("/sabbatical", handleSabbatical(store, writing))
 	r.Get("/category-rolling-sum", handleCategoryRollingSum(store))
 	r.Get("/alcohol-depression", handleSeries(store, AlcoholMood))
 	r.Get("/sleep-score", handleSeries(store, Sleep))
@@ -272,12 +274,14 @@ type categoryResponse struct {
 	Data            []CategoryRow `json:"data"`
 	HobbyCategories []string      `json:"hobby_categories"`
 	WorkCategories  []string      `json:"work_categories"`
+	StudyCategories []string      `json:"study_categories"`
 	OtherCategories []string      `json:"other_categories"`
 	WindowDays      int           `json:"window_days"`
 	DecayLambda     float64       `json:"decay_lambda"`
 }
 
-// handleCategoryRollingSum: ?hobby=a,b&work=c&days=7&limit=30&lambda=0.2.
+// handleCategoryRollingSum: ?hobby=a,b&work=c&study=d,e&days=7&limit=30&lambda=0.2
+// (study optional).
 func handleCategoryRollingSum(store *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -285,7 +289,7 @@ func handleCategoryRollingSum(store *Store) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "At least one of hobby or work parameters required")
 			return
 		}
-		hobby, work := splitCodes(q.Get("hobby")), splitCodes(q.Get("work"))
+		groups := Groups{Hobby: splitCodes(q.Get("hobby")), Work: splitCodes(q.Get("work")), Study: splitCodes(q.Get("study"))}
 		window, err1 := intParam(r, "days", defaultWindow)
 		limit, err2 := intParam(r, "limit", defaultCategoryLimit)
 		lambda, err3 := floatParam(r, "lambda", defaultLambda)
@@ -307,14 +311,40 @@ func handleCategoryRollingSum(store *Store) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, "internal error")
 			return
 		}
-		hobbyCats, workCats, otherCats := Categories(days, hobby, work)
+		lists := Categories(days, groups)
 		writeJSON(w, http.StatusOK, categoryResponse{
-			Data:            tail(RollingCategory(days, hobby, work, window, lambda), limit),
-			HobbyCategories: hobbyCats,
-			WorkCategories:  workCats,
-			OtherCategories: otherCats,
+			Data:            tail(RollingCategory(days, groups, window, lambda), limit),
+			HobbyCategories: lists.Hobby,
+			WorkCategories:  lists.Work,
+			StudyCategories: lists.Study,
+			OtherCategories: lists.Other,
 			WindowDays:      window,
 			DecayLambda:     lambda,
+		})
+	}
+}
+
+// handleSabbatical: per-day square counts for the Sabbatical '27 grid.
+// Writing comes from manuscript-studio; if that fails the other types are
+// still served, with writing_available false.
+func handleSabbatical(store *Store, writing *WritingSource) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		days, err := store.Days()
+		if err != nil {
+			log.Printf("[sxiva] read days: %v", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		var points map[string]int
+		if writing != nil {
+			if points, err = writing.Points(r.Context()); err != nil {
+				log.Printf("[sxiva] sabbatical: %v", err)
+				points = nil
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"writing_available": points != nil,
+			"days":              Sabbatical(days, points),
 		})
 	}
 }

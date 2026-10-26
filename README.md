@@ -65,15 +65,22 @@ Plus `GET /healthz` at the server root (used by Docker healthcheck).
 Public, read-only — `?limit=N` = the N most recent days (default 60),
 oldest first:
 
-- `GET /api/sxiva/category-rolling-sum?hobby=a,b&work=sp&days=7&limit=30&lambda=0.2`
-  — per day: `hobby_raw`/`other_raw`/`total_raw` (sums over `days`
-  rows), `hobby_weighted` (decay-weighted over `days` calendar days),
-  `work_raw`/`work_weighted` (last 5 weekday rows; `meet` counts as
-  work), plus the hobby/work/other category lists
+- `GET /api/sxiva/category-rolling-sum?hobby=a,b&work=sp&study=c,d&days=7&limit=30&lambda=0.2`
+  — per day: `hobby_raw`/`study_raw`/`other_raw`/`total_raw` (sums over
+  `days` rows), `hobby_weighted`/`study_weighted` (decay-weighted over
+  `days` calendar days), `work_raw`/`work_weighted` (last 5 weekday rows;
+  `meet` counts as work), plus the hobby/work/study/other category lists
+  (`study` is optional)
 - `GET /api/sxiva/alcohol-depression` — 7-day alcohol sum, its 15-day
   mean, the day's mood and its 7-day mean
 - `GET /api/sxiva/sleep-score` — sleep score and its 7-day mean
 - `GET /api/sxiva/drc` — the day's DRC counts
+- `GET /api/sxiva/sabbatical` — per-day square counts for the
+  Sabbatical '27 grid (`internal/sxiva/sabbatical.go`): writing from
+  manuscript-studio (the project's `manuscripts:` link; up to 10 of the
+  day's points), the rest from category minutes (10 min = 1, half-up)
+  and `[exe]`/`[alc]`. Counts only, never raw minutes;
+  `writing_available: false` when manuscript-studio can't be reached
 - `GET /api/sxiva/health`
 
 Bearer `sync_token` (the sxiva CLI):

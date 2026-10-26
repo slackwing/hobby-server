@@ -56,6 +56,18 @@ type Project struct {
 	// token the sxiva CLI sends with each upload. Empty = those
 	// endpoints answer 503. Never logged.
 	SyncToken string `yaml:"sync_token"`
+
+	// Manuscripts links the sxiva project to manuscript-studio, for the
+	// Sabbatical '27 grid's writing squares. Unset = no writing squares.
+	Manuscripts ManuscriptsLink `yaml:"manuscripts"`
+}
+
+// ManuscriptsLink: where manuscript-studio is (its local address on the
+// VM, base path included) and a personal API token with scope
+// points:read. The token is never logged.
+type ManuscriptsLink struct {
+	BaseURL string `yaml:"base_url"`
+	Token   string `yaml:"token"`
 }
 
 type Server struct {

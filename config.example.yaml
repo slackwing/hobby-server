@@ -115,6 +115,12 @@ projects:
     url_prefix: "/api/sxiva"
     cookie_path: "/status/"
     sync_token: "REPLACE_ME"   # openssl rand -hex 32
+    # Optional: writing points for the Sabbatical '27 grid, from
+    # manuscript-studio (same VM). The token is a manuscript-studio personal
+    # API token (scope points:read) for Andrew's user there.
+    # manuscripts:
+    #   base_url: "http://127.0.0.1:5001/manuscripts"
+    #   token: "mst_REPLACE_ME"
 
   # SPECIAL: the "admin" project hosts the shared cross-website auth
   # system (internal/shared). Its database must be the shared

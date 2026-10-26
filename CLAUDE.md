@@ -52,7 +52,13 @@ schema-related here, look at how manuscript-studio does it.
   token was hardcoded in public feathers and is burned). Ported
   2026-10-26 from a Flask + TimescaleDB stack; the rolling series are
   computed in Go (`internal/sxiva/rolling.go`, semantics in its header
-  comment) — the page depends on the exact numbers.
+  comment) — the page depends on the exact numbers. Since 2026-10-26 it also
+  serves a **study** group (`study=` param) and `GET /sabbatical`, the
+  per-day square counts for the temporary Sabbatical '27 grid
+  (`sabbatical.go`; plan in feathers
+  `foundry/website/docs/SABBATICAL_27_PLAN.md`). Writing squares come from
+  manuscript-studio's `/api/v1/points-daily` with a personal API token
+  (config `manuscripts: {base_url, token}` under the sxiva project).
 - **bots** — not a project but a service in the same binary
   (`internal/bots`): bot programs driving `is_bot` users through the
   PUBLIC site API. `hxh_chatbots` is the first (README "Bots"; spec in

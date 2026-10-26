@@ -74,7 +74,7 @@ func TestFixtureWeekdays(t *testing.T) {
 func TestRollingCategoryUnweighted(t *testing.T) {
 	// λ = 0: every weight is 1, so weighted = mean × window — isolates
 	// which rows each window takes.
-	got := RollingCategory(categoryFixture(), []string{"art"}, []string{"sp"}, 3, 0)
+	got := RollingCategory(categoryFixture(), Groups{Hobby: []string{"art"}, Work: []string{"sp"}}, 3, 0)
 
 	// Row windows count ROWS: on Thu 10-08 the 3 rows are Mon, Tue, Thu
 	// (Wed is missing) …
@@ -113,7 +113,7 @@ func TestRollingCategoryUnweighted(t *testing.T) {
 
 func TestRollingCategoryWeighted(t *testing.T) {
 	// λ = ln 2: weights halve per day of age.
-	got := RollingCategory(categoryFixture(), []string{"art"}, []string{"sp"}, 3, math.Ln2)
+	got := RollingCategory(categoryFixture(), Groups{Hobby: []string{"art"}, Work: []string{"sp"}}, 3, math.Ln2)
 
 	// Thu 10-08: Tue (age 2, w ¼) and Thu (w 1): (15 + 70) · 3/1.25 = 204.
 	if r := got[6]; r.HobbyWeighted != 204 {
@@ -128,7 +128,7 @@ func TestRollingCategoryWeighted(t *testing.T) {
 
 func TestRollingCategoryNoWeekdayYet(t *testing.T) {
 	days := []Day{{Date: day("2026-10-03"), CategoryMinutes: map[string]int64{"sp": 50}}} // a Saturday
-	got := RollingCategory(days, nil, []string{"sp"}, 7, 0.5)
+	got := RollingCategory(days, Groups{Work: []string{"sp"}}, 7, 0.5)
 	if got[0].WorkRaw != 0 || got[0].WorkWeighted != 0 {
 		t.Errorf("weekend-only work = %d/%v, want 0/0", got[0].WorkRaw, got[0].WorkWeighted)
 	}
@@ -136,17 +136,43 @@ func TestRollingCategoryNoWeekdayYet(t *testing.T) {
 
 func TestCategories(t *testing.T) {
 	days := []Day{
-		{Date: day("2026-10-01"), CategoryMinutes: map[string]int64{"art": 1, "sp": 1, "...": 1}},
+		{Date: day("2026-10-01"), CategoryMinutes: map[string]int64{"art": 1, "sp": 1, "...": 1, "crco": 1}},
 		{Date: day("2026-10-02"), CategoryMinutes: map[string]int64{"fam": 1, "art": 2}},
 	}
-	h, w, o := Categories(days, []string{"art", "ms"}, []string{"sp"})
-	if !reflect.DeepEqual(h, []string{"art"}) || !reflect.DeepEqual(w, []string{"sp"}) ||
-		!reflect.DeepEqual(o, []string{"...", "fam"}) {
-		t.Errorf("got hobby=%v work=%v other=%v", h, w, o)
+	got := Categories(days, Groups{Hobby: []string{"art", "ms"}, Work: []string{"sp"}, Study: []string{"crco", "nflx"}})
+	want := CategoryLists{Hobby: []string{"art"}, Work: []string{"sp"}, Study: []string{"crco"}, Other: []string{"...", "fam"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %+v, want %+v", got, want)
 	}
-	_, w, _ = Categories(days, []string{"art"}, nil)
-	if w == nil || len(w) != 0 {
-		t.Errorf("empty list must be [] not null, got %#v", w)
+	got = Categories(days, Groups{Hobby: []string{"art"}})
+	if got.Work == nil || len(got.Work) != 0 || got.Study == nil {
+		t.Errorf("empty lists must be [] not null, got %#v", got)
+	}
+}
+
+// Study: summed like hobby (row windows, calendar-weighted), and its codes
+// leave "other". With no study codes everything else is unchanged.
+func TestRollingCategoryStudy(t *testing.T) {
+	days := categoryFixture()
+	plain := RollingCategory(days, Groups{Hobby: []string{"art"}, Work: []string{"sp"}}, 3, 0)
+	withStudy := RollingCategory(days, Groups{Hobby: []string{"art"}, Work: []string{"sp"}, Study: []string{"fam"}}, 3, 0)
+	for i := range days {
+		p, s := plain[i], withStudy[i]
+		if p.HobbyRaw != s.HobbyRaw || p.HobbyWeighted != s.HobbyWeighted || p.WorkRaw != s.WorkRaw ||
+			p.WorkWeighted != s.WorkWeighted || p.TotalRaw != s.TotalRaw {
+			t.Fatalf("%s: adding a study group changed hobby/work/total", p.Date)
+		}
+		if p.StudyRaw != 0 || p.StudyWeighted != 0 {
+			t.Fatalf("%s: study without study codes = %d/%v", p.Date, p.StudyRaw, p.StudyWeighted)
+		}
+		if s.StudyRaw != p.OtherRaw || s.OtherRaw != 0 {
+			t.Fatalf("%s: fam should move from other (%d) to study, got study %d other %d", p.Date, p.OtherRaw, s.StudyRaw, s.OtherRaw)
+		}
+	}
+	// Thu 10-08: row window = Mon, Tue, Thu (5+6+7); calendar window =
+	// Tue + Thu → (6+7)/2 · 3 = 19.5.
+	if r := withStudy[6]; r.StudyRaw != 18 || r.StudyWeighted != 19.5 {
+		t.Errorf("10-08 study = %d/%v, want 18/19.5", r.StudyRaw, r.StudyWeighted)
 	}
 }
 
