@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        Ported from the standalone dashboard API (feathers
+        11.sxiv/dashboard, Flask + TimescaleDB, changesets 001-007):
+        same columns and types, so the data copies over as CSV. It was a
+        TimescaleDB hypertable there; here it's a plain table — one row
+        per day never needed more than the primary key.
+
+        sxiva_daily_summary: one row per .sxiva file (a day), written by
+        the sxiva CLI through POST /sync/daily.
+          - category_minutes: {"<category code>": minutes, ...}
+          - meet: work-meeting minutes (counted as work)
+          - day_of_week: U M T W R F S
+          - the rest are the file's daily attributes (sleep, dep = mood,
+            alc, drc = triggers/resisted/indulged, ...); NULL = not logged
+        sxiva_sync_metadata: one row (id 1); the CLI uploads files
+        modified since last_sync_timestamp.
+    -->
+
+    <changeSet id="001-initial-schema" author="sxiva">
+
+        <createTable tableName="sxiva_daily_summary">
+            <column name="date" type="DATE">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="day_of_week" type="CHAR(1)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="category_minutes" type="JSONB" defaultValueComputed="'{}'::jsonb">
+                <constraints nullable="false"/>
+            </column>
+            <column name="sleep_score" type="INTEGER"/>
+            <column name="sleep_hours" type="NUMERIC(2,1)"/>
+            <column name="dep_min" type="NUMERIC(2,1)"/>
+            <column name="dep_max" type="NUMERIC(2,1)"/>
+            <column name="dep_avg" type="NUMERIC(2,1)"/>
+            <column name="soc" type="INTEGER"/>
+            <column name="out" type="INTEGER"/>
+            <column name="exe" type="NUMERIC(2,1)"/>
+            <column name="xmx" type="INTEGER"/>
+            <column name="dist" type="NUMERIC(2,1)"/>
+            <column name="alc" type="NUMERIC(2,1)"/>
+            <column name="wea" type="NUMERIC(2,1)"/>
+            <column name="meet" type="INTEGER"/>
+            <column name="abi" type="NUMERIC(4,1)"/>
+            <column name="save" type="INTEGER"/>
+            <column name="drc_triggers" type="NUMERIC(5,1)"/>
+            <column name="drc_resisted" type="NUMERIC(5,1)"/>
+            <column name="drc_indulged" type="NUMERIC(5,1)"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <createTable tableName="sxiva_sync_metadata">
+            <column name="id" type="INTEGER" defaultValueNumeric="1">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="last_sync_timestamp" type="TIMESTAMPTZ">
+                <constraints nullable="false"/>
+            </column>
+            <column name="last_sync_file_count" type="INTEGER" defaultValueNumeric="0"/>
+            <column name="notes" type="TEXT"/>
+        </createTable>
+
+        <insert tableName="sxiva_sync_metadata">
+            <column name="id" valueNumeric="1"/>
+            <column name="last_sync_timestamp" valueComputed="'1970-01-01 00:00:00+00'::timestamptz"/>
+            <column name="last_sync_file_count" valueNumeric="0"/>
+        </insert>
+
+    </changeSet>
+
+</databaseChangeLog>

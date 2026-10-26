@@ -47,6 +47,7 @@ import (
 	"github.com/slackwing/hobby-server/internal/prep"
 	"github.com/slackwing/hobby-server/internal/rvedit"
 	"github.com/slackwing/hobby-server/internal/shared"
+	"github.com/slackwing/hobby-server/internal/sxiva"
 )
 
 // secureCookies is set once at startup based on cfg.Server.Env.
@@ -87,6 +88,8 @@ func main() {
 	var hxhPool *pgxpool.Pool
 	var bapProject *config.Project
 	var bapPool *pgxpool.Pool
+	var sxivaProject *config.Project
+	var sxivaPool *pgxpool.Pool
 
 	states := make([]projectState, 0, len(cfg.Projects))
 	for _, p := range cfg.Projects {
@@ -122,6 +125,16 @@ func main() {
 			bapPool = pool
 			log.Printf("project %q ready (data only): db=%s url_prefix=%s auth=shared",
 				p.Name, p.Database.Name, p.URLPrefix)
+			continue
+		}
+		// sxiva (the status dashboard) has no users at all: public reads,
+		// and the sxiva CLI uploads with the project's sync_token.
+		if p.Name == "sxiva" {
+			p := p
+			sxivaProject = &p
+			sxivaPool = pool
+			log.Printf("project %q ready (data only): db=%s url_prefix=%s auth=token(configured=%v)",
+				p.Name, p.Database.Name, p.URLPrefix, p.SyncToken != "")
 			continue
 		}
 		states = append(states, projectState{
@@ -301,6 +314,13 @@ func main() {
 					bap.Mount(sub, bapStore, adminStore, notify)
 				})
 			}
+		}
+
+		// sxiva needs no shared auth, so unlike hxh/bap it mounts without it.
+		if sxivaProject != nil {
+			r.Route(sxivaProject.URLPrefix, func(sub chi.Router) {
+				sxiva.Mount(sub, sxiva.NewStore(sxivaPool), sxivaProject.SyncToken)
+			})
 		}
 
 		r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {

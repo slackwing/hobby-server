@@ -36,6 +36,12 @@ discipline, Cloud SQL via the Cloud SQL Auth Proxy.
   Database: `bap`. URL prefix: `/api/bap` (Apache rewrites public
   `/bap/api/*` to this). Auth via the shared system (no per-project
   floor); see `internal/bap/`.
+- **sxiva** — data for the
+  [status dashboard](https://github.com/slackwing/feathers/tree/master/foundry/website/html/status)
+  (Andrew's daily minutes from his `.sxiva` files). Database: `sxiva`.
+  URL prefix: `/api/sxiva` (Apache rewrites public `/status/api/*` to
+  this). No users at all: reads are public, and the sxiva CLI uploads
+  with the project's `sync_token`. See `internal/sxiva/`.
 - **admin** — shared cross-website auth system (one account, roles per
   website, SSO cookie `hobby_session` at Path=/, invite/reset links).
   Database: shared `hobby_server` (tables prefixed `hobby_server_*`).
@@ -53,6 +59,29 @@ For each project P, three endpoints under its `url_prefix`:
   otherwise
 
 Plus `GET /healthz` at the server root (used by Docker healthcheck).
+
+### sxiva (status dashboard; no auth floor)
+
+Public, read-only — `?limit=N` = the N most recent days (default 60),
+oldest first:
+
+- `GET /api/sxiva/category-rolling-sum?hobby=a,b&work=sp&days=7&limit=30&lambda=0.2`
+  — per day: `hobby_raw`/`other_raw`/`total_raw` (sums over `days`
+  rows), `hobby_weighted` (decay-weighted over `days` calendar days),
+  `work_raw`/`work_weighted` (last 5 weekday rows; `meet` counts as
+  work), plus the hobby/work/other category lists
+- `GET /api/sxiva/alcohol-depression` — 7-day alcohol sum, its 15-day
+  mean, the day's mood and its 7-day mean
+- `GET /api/sxiva/sleep-score` — sleep score and its 7-day mean
+- `GET /api/sxiva/drc` — the day's DRC counts
+- `GET /api/sxiva/health`
+
+Bearer `sync_token` (the sxiva CLI):
+
+- `POST /api/sxiva/sync/daily` — upsert one day (one parsed `.sxiva`
+  file)
+- `GET  /api/sxiva/status/last-sync` — the CLI uploads files modified
+  since this
 
 ### hxh chat (shared-auth session with any role on `hxh`)
 

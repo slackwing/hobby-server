@@ -51,6 +51,11 @@ type Project struct {
 
 	// Telegram is optional; see the Telegram type.
 	Telegram Telegram `yaml:"telegram"`
+
+	// SyncToken gates the sxiva project's write endpoints: the bearer
+	// token the sxiva CLI sends with each upload. Empty = those
+	// endpoints answer 503. Never logged.
+	SyncToken string `yaml:"sync_token"`
 }
 
 type Server struct {

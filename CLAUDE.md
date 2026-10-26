@@ -41,6 +41,18 @@ schema-related here, look at how manuscript-studio does it.
   no per-project auth floor — endpoints (`internal/bap/`) are gated
   by the shared **admin** system; any logged-in user reads/writes
   their own cup state.
+- **sxiva** — the
+  [status dashboard](https://andrewcheong.com/status)'s data (Andrew's
+  daily minutes, parsed from his `.sxiva` files). Frontend: feathers
+  `foundry/website/html/status/`; uploader: the sxiva CLI (feathers
+  `11.sxiv/tools/sxiva/sync.py`). Own database (`sxiva`), tables
+  `sxiva_daily_summary` + `sxiva_sync_metadata`. The only project with
+  NO users: reads are public, the CLI's two endpoints take a bearer
+  `sync_token` from the config block (never in a repo — the old Flask
+  token was hardcoded in public feathers and is burned). Ported
+  2026-10-26 from a Flask + TimescaleDB stack; the rolling series are
+  computed in Go (`internal/sxiva/rolling.go`, semantics in its header
+  comment) — the page depends on the exact numbers.
 - **bots** — not a project but a service in the same binary
   (`internal/bots`): bot programs driving `is_bot` users through the
   PUBLIC site API. `hxh_chatbots` is the first (README "Bots"; spec in

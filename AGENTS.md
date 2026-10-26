@@ -66,6 +66,10 @@ will break the frontend. Each project has paired repos:
   project (config + `liquibase/hxh/`)
 - **bap**: feathers' `foundry/website/html/bap/` ↔ this repo's `bap`
   project (`internal/bap/` + `liquibase/bap/`)
+- **sxiva**: feathers' `foundry/website/html/status/` (the dashboard
+  page) and `11.sxiv/tools/sxiva/sync.py` (the CLI's uploader) ↔ this
+  repo's `sxiva` project (`internal/sxiva/` + `liquibase/sxiva/`). The
+  page reads the JSON field names; the CLI posts the day's fields.
 - **admin**: feathers' `foundry/website/html/admin/` (console, default
   `_invite/` + `_reset/` pages, `assets/setpw.js`) and each site's
   `_invite/` + `_reset/` skins and `_email/` templates ↔ this repo's

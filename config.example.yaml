@@ -101,6 +101,21 @@ projects:
     #   bot_token: "REPLACE_ME"
     #   chat_id: "REPLACE_ME"
 
+  - name: sxiva
+    database:
+      host: "127.0.0.1"        # Cloud SQL Auth Proxy
+      port: 5432
+      name: "sxiva"
+      user: "sxiva_user"
+      password: "REPLACE_ME"
+    # Public path is andrewcheong.com/status/api/* ; Apache proxies it
+    # to 127.0.0.1:5002/api/sxiva/* . No login at all: the dashboard's
+    # reads are public, and the sxiva CLI uploads with sync_token
+    # (bearer). cookie_path is required by the loader but unused.
+    url_prefix: "/api/sxiva"
+    cookie_path: "/status/"
+    sync_token: "REPLACE_ME"   # openssl rand -hex 32
+
   # SPECIAL: the "admin" project hosts the shared cross-website auth
   # system (internal/shared). Its database must be the shared
   # hobby_server DB (where the hobby_server_* tables live) and its

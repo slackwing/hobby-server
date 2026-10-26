@@ -39,6 +39,12 @@ plugs in by adding a config entry + a changelog dir.
   Frontend in `slackwing/feathers`: `foundry/website/html/bap/`.
   Uses the shared auth system (like hxh, no per-project floor);
   endpoints in `internal/bap/`.
+- **sxiva** — the [status dashboard](https://andrewcheong.com/status)'s
+  data: one row per day of Andrew's `.sxiva` minutes, and the rolling
+  series the page charts (`internal/sxiva/`). The only project with no
+  users: public reads, and the sxiva CLI (feathers `11.sxiv/tools/`)
+  uploads with a bearer `sync_token` from the config. Frontend in
+  `slackwing/feathers`: `foundry/website/html/status/`.
 - **admin** — shared cross-website auth (`internal/shared/`; SSO
   cookie `hobby_session` at Path=/, per-website roles, invite/reset
   links). Special-cased in `cmd/server/main.go`; tables prefixed
