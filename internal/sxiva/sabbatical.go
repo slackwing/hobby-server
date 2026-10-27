@@ -1,11 +1,12 @@
 package sxiva
 
 // Sabbatical '27 — the squares grid at the top of the status page (feathers
-// foundry/website/html/status/sabbatical-27.js; plan:
-// foundry/website/docs/SABBATICAL_27_PLAN.md). This is how many squares of
-// each type a day earns, BEFORE the page's grid bulldozes any overflow.
+// foundry/website/html/status/sabbatical-27.js). This is how many squares of
+// each type a day earns, BEFORE the page's grid caps and bulldozes them.
 // Only these counts leave the server: the page is public, the per-category
-// minutes stay private. Temporary — delete with the plugin.
+// minutes stay private. Types are named by their grid color, not by what
+// they measure — what each color means is Andrew's business. Temporary:
+// delete with the plugin.
 
 import (
 	"math"
@@ -13,40 +14,39 @@ import (
 )
 
 const (
-	minutesPerSquare  = 10 // every 10 minutes is a square, rounded half-up (5 → 1)
-	maxWritingSquares = 10 // writing: up to 10 of the day's manuscript-studio points
-	drinksAllowance   = 2  // health: 2 − drinks (rounded half-up), never below 0
+	minutesPerSquare = 10 // every 10 minutes is a square, rounded half-up (5 → 1)
+	drinksAllowance  = 2  // blue: 2 − drinks (rounded half-up), never below 0
 )
 
-// SabbaticalDay is one day's square counts, one field per grid type.
+// SabbaticalDay is one day's square counts, one field per grid color.
 type SabbaticalDay struct {
-	Date                 string `json:"date"`
-	Writing              int    `json:"writing"`
-	Netflix              int    `json:"netflix"`
-	CrucialConversations int    `json:"crucial-conversations"`
-	StaffEngineer        int    `json:"staff-engineer"`
-	Abi                  int    `json:"abi"`
-	Health               int    `json:"health"`
-	Editing              int    `json:"editing"`
-	CriticalReading      int    `json:"critical-reading"`
+	Date   string `json:"date"`
+	Green  int    `json:"green"`  // manuscript-studio points (the page caps them)
+	Red    int    `json:"red"`    // [nflx] minutes
+	Orange int    `json:"orange"` // [crco] minutes
+	White  int    `json:"white"`  // [staff] minutes
+	Yellow int    `json:"yellow"` // [abi] + [hxh] + [rv] minutes
+	Blue   int    `json:"blue"`   // [exe] and [alc]
+	Brown  int    `json:"brown"`  // [rk] minutes
+	Purple int    `json:"purple"` // [crit] minutes
 }
 
 func (d SabbaticalDay) empty() bool {
-	return d.Writing+d.Netflix+d.CrucialConversations+d.StaffEngineer+d.Abi+d.Health+d.Editing+d.CriticalReading == 0
+	return d.Green+d.Red+d.Orange+d.White+d.Yellow+d.Blue+d.Brown+d.Purple == 0
 }
 
-// Types fed by category minutes: the codes' minutes are summed, then
+// Colors fed by category minutes: the codes' minutes are summed, then
 // turned into squares.
 var sabbaticalMinutes = []struct {
 	codes []string
 	set   func(*SabbaticalDay, int)
 }{
-	{[]string{"nflx"}, func(d *SabbaticalDay, n int) { d.Netflix = n }},
-	{[]string{"crco"}, func(d *SabbaticalDay, n int) { d.CrucialConversations = n }},
-	{[]string{"staff"}, func(d *SabbaticalDay, n int) { d.StaffEngineer = n }},
-	{[]string{"crit"}, func(d *SabbaticalDay, n int) { d.CriticalReading = n }},
-	{[]string{"rk"}, func(d *SabbaticalDay, n int) { d.Editing = n }},
-	{[]string{"abi", "hxh", "rv"}, func(d *SabbaticalDay, n int) { d.Abi = n }},
+	{[]string{"nflx"}, func(d *SabbaticalDay, n int) { d.Red = n }},
+	{[]string{"crco"}, func(d *SabbaticalDay, n int) { d.Orange = n }},
+	{[]string{"staff"}, func(d *SabbaticalDay, n int) { d.White = n }},
+	{[]string{"crit"}, func(d *SabbaticalDay, n int) { d.Purple = n }},
+	{[]string{"rk"}, func(d *SabbaticalDay, n int) { d.Brown = n }},
+	{[]string{"abi", "hxh", "rv"}, func(d *SabbaticalDay, n int) { d.Yellow = n }},
 }
 
 // squaresFromMinutes: one per 10 minutes, half-up.
@@ -57,10 +57,10 @@ func squaresFromMinutes(m int64) int {
 	return int((m + minutesPerSquare/2) / minutesPerSquare)
 }
 
-// healthSquares: one per 0.5 of [exe], plus 2 − drinks ([alc] rounded
+// blueSquares: one per 0.5 of [exe], plus 2 − drinks ([alc] rounded
 // half-up, so half a drink counts as one). A blank [alc] is unknown, not
 // zero: it earns nothing.
-func healthSquares(d Day) int {
+func blueSquares(d Day) int {
 	n := 0
 	if d.Exe != nil && *d.Exe > 0 {
 		n += int(math.Floor(*d.Exe*2 + 1e-9))
@@ -74,10 +74,11 @@ func healthSquares(d Day) int {
 	return n
 }
 
-// Sabbatical turns the sxiva days and manuscript-studio's daily writing
-// points (date → points; nil when unavailable) into per-day square counts.
-// Days that earn nothing are left out; oldest first.
-func Sabbatical(days []Day, writing map[string]int) []SabbaticalDay {
+// Sabbatical turns the sxiva days and manuscript-studio's daily points
+// (date → points; nil when unavailable) into per-day square counts. Days
+// that earn nothing are left out; oldest first. No caps here — the page's
+// grid applies them (schema max), so the counts stay the raw truth.
+func Sabbatical(days []Day, points map[string]int) []SabbaticalDay {
 	byDate := map[string]*SabbaticalDay{}
 	get := func(date string) *SabbaticalDay {
 		if byDate[date] == nil {
@@ -94,10 +95,10 @@ func Sabbatical(days []Day, writing map[string]int) []SabbaticalDay {
 			}
 			m.set(out, squaresFromMinutes(sum))
 		}
-		out.Health = healthSquares(d)
+		out.Blue = blueSquares(d)
 	}
-	for date, points := range writing {
-		get(date).Writing = min(maxWritingSquares, max(0, points))
+	for date, p := range points {
+		get(date).Green = max(0, p)
 	}
 	out := []SabbaticalDay{}
 	for _, d := range byDate {

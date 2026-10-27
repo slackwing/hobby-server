@@ -76,11 +76,12 @@ oldest first:
 - `GET /api/sxiva/sleep-score` — sleep score and its 7-day mean
 - `GET /api/sxiva/drc` — the day's DRC counts
 - `GET /api/sxiva/sabbatical` — per-day square counts for the
-  Sabbatical '27 grid (`internal/sxiva/sabbatical.go`): writing from
-  manuscript-studio (the project's `manuscripts:` link; up to 10 of the
-  day's points), the rest from category minutes (10 min = 1, half-up)
-  and `[exe]`/`[alc]`. Counts only, never raw minutes;
-  `writing_available: false` when manuscript-studio can't be reached
+  Sabbatical '27 grid (`internal/sxiva/sabbatical.go`), keyed by grid
+  color: green = the day's manuscript-studio points (the project's
+  `manuscripts:` link), the others from category minutes (10 min = 1,
+  half-up) and `[exe]`/`[alc]`. Raw counts — the page's grid caps and
+  bulldozes them; never raw minutes; `writing_available: false` when
+  manuscript-studio can't be reached
 - `GET /api/sxiva/health`
 
 Bearer `sync_token` (the sxiva CLI):

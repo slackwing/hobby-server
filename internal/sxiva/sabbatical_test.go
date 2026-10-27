@@ -18,7 +18,7 @@ func TestSquaresFromMinutes(t *testing.T) {
 	}
 }
 
-func TestHealthSquares(t *testing.T) {
+func TestBlueSquares(t *testing.T) {
 	cases := []struct {
 		exe, alc *float64
 		want     int
@@ -35,7 +35,7 @@ func TestHealthSquares(t *testing.T) {
 		{f64(0.4), nil, 0, "less than half an [exe] earns nothing"},
 	}
 	for _, c := range cases {
-		if got := healthSquares(Day{Exe: c.exe, Alc: c.alc}); got != c.want {
+		if got := blueSquares(Day{Exe: c.exe, Alc: c.alc}); got != c.want {
 			t.Errorf("%s: got %d, want %d", c.why, got, c.want)
 		}
 	}
@@ -55,13 +55,13 @@ func TestSabbatical(t *testing.T) {
 		{Date: day("2026-10-02"), CategoryMinutes: map[string]int64{"rv": 9, "abi": 1}}, // 10 → 1
 		{Date: day("2026-10-03"), CategoryMinutes: map[string]int64{"art": 300}},        // nothing → left out
 	}
-	writing := map[string]int{"2026-10-01": 13, "2026-10-05": 4}
-	got := Sabbatical(days, writing)
+	points := map[string]int{"2026-10-01": 13, "2026-10-05": 4}
+	got := Sabbatical(days, points)
 	want := []SabbaticalDay{
-		{Date: "2026-10-01", Writing: 10, Netflix: 3, CrucialConversations: 1, StaffEngineer: 0,
-			Abi: 1, Health: 4, Editing: 2, CriticalReading: 6},
-		{Date: "2026-10-02", Abi: 1},
-		{Date: "2026-10-05", Writing: 4}, // writing on a day with no minutes file
+		{Date: "2026-10-01", Green: 13, Red: 3, Orange: 1, White: 0, // points are passed through uncapped
+			Yellow: 1, Blue: 4, Brown: 2, Purple: 6},
+		{Date: "2026-10-02", Yellow: 1},
+		{Date: "2026-10-05", Green: 4}, // points on a day with no minutes file
 	}
 	if len(got) != len(want) {
 		t.Fatalf("got %d days %+v, want %d", len(got), got, len(want))
@@ -72,8 +72,8 @@ func TestSabbatical(t *testing.T) {
 		}
 	}
 
-	if out := Sabbatical(days, nil); len(out) != 2 || out[0].Writing != 0 {
-		t.Errorf("without writing: %+v", out)
+	if out := Sabbatical(days, nil); len(out) != 2 || out[0].Green != 0 {
+		t.Errorf("without points: %+v", out)
 	}
 	if out := Sabbatical(nil, nil); out == nil || len(out) != 0 {
 		t.Errorf("no data must be [] not null: %#v", out)
