@@ -57,6 +57,11 @@ type Project struct {
 	// endpoints answer 503. Never logged.
 	SyncToken string `yaml:"sync_token"`
 
+	// JobsWatch turns on the sxiva project's hourly Netflix roles check
+	// (internal/sxiva/jobs_watch.go). Off by default, so dev and test
+	// servers never fetch from the job sites.
+	JobsWatch bool `yaml:"jobs_watch"`
+
 	// Manuscripts links the sxiva project to manuscript-studio, for the
 	// Sabbatical '27 grid's writing squares. Unset = no writing squares.
 	Manuscripts ManuscriptsLink `yaml:"manuscripts"`

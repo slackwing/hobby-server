@@ -59,6 +59,14 @@ schema-related here, look at how manuscript-studio does it.
   `foundry/website/docs/SABBATICAL_27_PLAN.md`). Writing squares come from
   manuscript-studio's `/api/v1/points-daily` with a personal API token
   (config `manuscripts: {base_url, token}` under the sxiva project).
+  Also the **Netflix roles watcher** (`jobs*.go`, tables `sxiva_job_*`,
+  changeset 002): hourly (`jobs_watch: true` in the sxiva block) it
+  catalogs SE5/SE6 postings from the careers site's JSON API and
+  LinkedIn's public guest search (never a LinkedIn account), roles keyed
+  by UUIDv5 of the normalized title, salary from each new posting's
+  description; endpoints admin-only via shared auth. `go test` needs
+  `SXIVA_TEST_DB_URL` for the DB-backed watcher test;
+  `SXIVA_JOBS_LIVE=1` runs one real fetch (`jobs_live_test.go`).
 - **bots** — not a project but a service in the same binary
   (`internal/bots`): bot programs driving `is_bot` users through the
   PUBLIC site API. `hxh_chatbots` is the first (README "Bots"; spec in

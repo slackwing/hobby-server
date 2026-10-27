@@ -84,6 +84,19 @@ oldest first:
   manuscript-studio can't be reached
 - `GET /api/sxiva/health`
 
+Admin only (shared auth, global admin) — the Netflix roles watcher
+(`internal/sxiva/jobs*.go`; hourly when the project sets `jobs_watch:
+true`): Software Engineer 5/6 postings from the Netflix careers site and
+LinkedIn's public job search, one role per normalized title (UUIDv5), with
+salary ranges:
+
+- `GET /api/sxiva/jobs` — `{roles: [{role_id, title, favorite, hidden,
+  posted_at, gone_at, salary_min, salary_max, locations, postings:
+  [{source, url, location, posted_at, gone_at}]}], checks: [{source,
+  checked_at, ok, error}]}` — every role ever seen, newest posting first
+- `PATCH /api/sxiva/jobs/roles/{role_id}` `{favorite?, hidden?}`
+- `POST /api/sxiva/jobs/refresh` — check the sources now
+
 Bearer `sync_token` (the sxiva CLI):
 
 - `POST /api/sxiva/sync/daily` — upsert one day (one parsed `.sxiva`

@@ -318,9 +318,19 @@ func main() {
 
 		// sxiva needs no shared auth, so unlike hxh/bap it mounts without it.
 		if sxivaProject != nil {
+			sxivaStore := sxiva.NewStore(sxivaPool)
+			// The roles watcher's endpoints need the shared auth (admin only).
+			var jobs *sxiva.Jobs
+			if adminStore != nil {
+				jobs = &sxiva.Jobs{Watcher: sxiva.NewJobWatcher(sxivaStore), Admin: adminStore}
+				if sxivaProject.JobsWatch {
+					go jobs.Watcher.Run(ctx, time.Hour)
+					log.Printf("project %q: roles watcher on (hourly)", sxivaProject.Name)
+				}
+			}
 			r.Route(sxivaProject.URLPrefix, func(sub chi.Router) {
-				sxiva.Mount(sub, sxiva.NewStore(sxivaPool), sxivaProject.SyncToken,
-					sxiva.NewWritingSource(sxivaProject.Manuscripts.BaseURL, sxivaProject.Manuscripts.Token))
+				sxiva.Mount(sub, sxivaStore, sxivaProject.SyncToken,
+					sxiva.NewWritingSource(sxivaProject.Manuscripts.BaseURL, sxivaProject.Manuscripts.Token), jobs)
 			})
 		}
 

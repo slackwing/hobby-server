@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        Netflix roles watcher (internal/sxiva/jobs*.go): what the hourly
+        job finds on each source, kept for good.
+
+        sxiva_job_role: a role, identified by role_id = UUIDv5 of its
+          normalized title, so it is recognized whenever and wherever it
+          reappears. favorite / hidden are Andrew's marks and follow the
+          role across sources.
+        sxiva_job_listing: a source's posting of a role. gone_at is set when
+          a successful fetch no longer finds it (cleared if it comes back);
+          rows are never deleted. salary_checked_at: the posting's detail
+          page has been read for a salary range (once).
+        sxiva_job_fetch: the last check of each source.
+    -->
+
+    <changeSet id="002-jobs" author="sxiva">
+
+        <createTable tableName="sxiva_job_role">
+            <column name="role_id" type="UUID">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="title" type="TEXT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="favorite" type="BOOLEAN" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+            <column name="hidden" type="BOOLEAN" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+            <column name="first_seen_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <createTable tableName="sxiva_job_listing">
+            <column name="source" type="VARCHAR(20)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="external_id" type="VARCHAR(40)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="role_id" type="UUID">
+                <constraints nullable="false" foreignKeyName="fk_sxiva_job_listing_role"
+                             referencedTableName="sxiva_job_role" referencedColumnNames="role_id"/>
+            </column>
+            <column name="title" type="TEXT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="location" type="TEXT" defaultValue="">
+                <constraints nullable="false"/>
+            </column>
+            <column name="url" type="TEXT" defaultValue="">
+                <constraints nullable="false"/>
+            </column>
+            <column name="posted_at" type="TIMESTAMPTZ"/>
+            <column name="salary_min" type="INTEGER"/>
+            <column name="salary_max" type="INTEGER"/>
+            <column name="salary_checked_at" type="TIMESTAMPTZ"/>
+            <column name="first_seen_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+            <column name="last_seen_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+            <column name="gone_at" type="TIMESTAMPTZ"/>
+        </createTable>
+        <addPrimaryKey tableName="sxiva_job_listing" columnNames="source, external_id"
+                       constraintName="pk_sxiva_job_listing"/>
+
+        <createTable tableName="sxiva_job_fetch">
+            <column name="source" type="VARCHAR(20)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="checked_at" type="TIMESTAMPTZ">
+                <constraints nullable="false"/>
+            </column>
+            <column name="ok" type="BOOLEAN">
+                <constraints nullable="false"/>
+            </column>
+            <column name="error" type="TEXT" defaultValue="">
+                <constraints nullable="false"/>
+            </column>
+            <column name="found" type="INTEGER" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+    </changeSet>
+
+</databaseChangeLog>

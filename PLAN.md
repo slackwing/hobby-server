@@ -1,7 +1,9 @@
 # PLAN: Netflix roles watcher (status page, admin-only)
 
 Status: approved by Andrew 2026-10-26, executing the same day. Delete this
-file when §6 is done.
+file when §6 is done. Changed mid-build (Andrew): one COMBINED list with
+a source mark per card (§4), gone roles in red for a week, and a toggle
+that opens everything (hidden and past roles).
 
 ## 0. What and why
 
@@ -19,7 +21,8 @@ Decisions (Andrew, 2026-10-26):
   level ("Software Engineer 4/5") count when they include 5 or 6; so do
   "(L5)"/"(L6)" titles.
 - **Salary range** from both sources.
-- One dashboard per source; simple, glanceable.
+- One combined list, each card marked with its source(s); simple,
+  glanceable.
 
 ## 1. Sources (verified 2026-10-26)
 
@@ -73,9 +76,11 @@ seen before (one detail request per new role).
   successful list fetch).
 - Endpoints under `/api/sxiva` (public `/status/api`), all
   `shared.RequireAdmin`:
-  - `GET /jobs` → `{sources: [{source, checked_at, ok, error, listings:
-    [{role_id, title, location, url, posted_at, salary_min, salary_max,
-    favorite, hidden}]}]}` — active listings, newest posting first.
+  - `GET /jobs` → `{roles: [{role_id, title, favorite, hidden, posted_at,
+    gone_at, salary_min, salary_max, locations, postings: [{source, url,
+    location, posted_at, gone_at}]}], checks: [...]}` — every role ever
+    seen, sources combined; posted_at = earliest live posting, gone_at
+    set once every source dropped it.
   - `PATCH /jobs/roles/{role_id}` `{favorite?, hidden?}` → 204.
   - `POST /jobs/refresh` → 202, runs a fetch now.
   The session cookie is SameSite=Lax, so cross-site writes can't ride it.
@@ -88,13 +93,15 @@ A second plugin, inserted right after the Sabbatical card. On load it asks
 render. Logged out: nothing, plus a small "sign in" link in the footer
 (→ `/admin/`; the SSO cookie covers /status).
 
-One column per source (careers site | LinkedIn), each a list of rows:
+One list for both sources (a role on both is one card), each row:
 - ★ (favorite toggle) · short title (`Software Engineer` → `SE`, so
-  "SE5 – iOS"), linked to the posting · days since posted ("today",
-  "1d", "12d") · salary ("$320–500K") · location when not remote.
+  "SE5 – iOS"), linked to the posting · source mark(s) (careers site /
+  LinkedIn) · days since posted ("today", "1d", "12d") · salary
+  ("$320–500K") · location when not remote.
 - Newest posting first. Posted today or yesterday → highlighted.
-- × hides a role; hidden ones collapse into "N hidden" at the bottom,
-  where they can be shown and unhidden.
+- Gone roles stay, in red, for a week after they disappear.
+- × hides a role. An "all" toggle opens everything: hidden roles and
+  every past role, to unhide or look back.
 - Per source: when it was last checked; a failed check shows quietly.
 
 ## 5. Verify

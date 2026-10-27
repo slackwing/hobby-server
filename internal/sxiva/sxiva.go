@@ -201,8 +201,12 @@ func (s *Store) Ping() error {
 }
 
 // Mount wires the sxiva endpoints. token gates the CLI's two endpoints;
-// writing (nil = not configured) feeds the Sabbatical '27 writing squares.
-func Mount(r chi.Router, store *Store, token string, writing *WritingSource) {
+// writing (nil = not configured) feeds the Sabbatical '27 green squares;
+// jobs (nil = no shared auth) mounts the admin-only roles watcher.
+func Mount(r chi.Router, store *Store, token string, writing *WritingSource, jobs *Jobs) {
+	if jobs != nil && jobs.Admin != nil {
+		mountJobs(r, store, jobs)
+	}
 	r.Get("/health", handleHealth(store))
 	r.Get("/sabbatical", handleSabbatical(store, writing))
 	r.Get("/category-rolling-sum", handleCategoryRollingSum(store))

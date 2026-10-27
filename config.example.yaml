@@ -115,6 +115,9 @@ projects:
     url_prefix: "/api/sxiva"
     cookie_path: "/status/"
     sync_token: "REPLACE_ME"   # openssl rand -hex 32
+    # Optional: the hourly Netflix roles check (admin-only panel on the
+    # status page). Off unless set.
+    # jobs_watch: true
     # Optional: writing points for the Sabbatical '27 grid, from
     # manuscript-studio (same VM). The token is a manuscript-studio personal
     # API token (scope points:read) for Andrew's user there.
