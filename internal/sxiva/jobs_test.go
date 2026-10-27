@@ -74,6 +74,43 @@ func TestWantedLevel(t *testing.T) {
 	}
 }
 
+func TestFilters(t *testing.T) {
+	places := map[string]bool{
+		"New York, NY":                    true,
+		"New York, United States":         true,
+		"New York City Metropolitan Area": true,
+		"NYC":                             true,
+		"Hybrid - NYC office":             true,
+		"United States":                   true,
+		"US":                              true,
+		"USA":                             true,
+		"United States (Remote)":          true,
+		"":                                true, // no location: kept
+		"Los Gatos, CA":                   false,
+		"Seattle, WA":                     false,
+		"Los Angeles, CA":                 false,
+		"Los Gatos, CA, United States":    false, // a city, though the country is named
+		"Austin, TX (Remote)":             false,
+	}
+	for loc, want := range places {
+		if got := wantedLinkedInPlace(loc); got != want {
+			t.Errorf("wantedLinkedInPlace(%q) = %v, want %v", loc, got, want)
+		}
+	}
+	roles := map[string]bool{
+		"Software Engineer 5 - iOS":             true,
+		"Software Engineer 5 – IOS Platform":    true,
+		"Software Engineer 6 - Mobile (iOS)":    true,
+		"Software Engineer 5 - Android":         false,
+		"Software Engineer 5 - Netflix Studios": false, // "ios" inside a word
+	}
+	for title, want := range roles {
+		if got := unwantedRole(title); got != want {
+			t.Errorf("unwantedRole(%q) = %v, want %v", title, got, want)
+		}
+	}
+}
+
 func TestParseSalary(t *testing.T) {
 	cases := []struct {
 		text     string

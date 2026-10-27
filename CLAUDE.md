@@ -69,7 +69,10 @@ schema-related here, look at how manuscript-studio does it.
   `meta`, salary); Netflix's displayed posting date lives only in its
   detail (`custom_JD.posting_date`, re-read every run — the list's
   `t_create` is months older), LinkedIn's in its list. A role is as new
-  as its latest posting. LinkedIn 429s bursts: 6 s between requests, 10
+  as its latest posting. Filters (Andrew's): no iOS roles from either
+  source; LinkedIn kept to New York / NYC / bare-country ("United
+  States", "US", "USA") / blank locations — filtered postings are DELETED,
+  not marked gone. LinkedIn 429s bursts: 6 s between requests, 10
   posting pages per run. Endpoints admin-only via shared auth. `go test`
   needs `SXIVA_TEST_DB_URL` for the DB-backed watcher test;
   `SXIVA_JOBS_LIVE=1` runs one real fetch (`jobs_live_test.go`;

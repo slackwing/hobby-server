@@ -102,13 +102,15 @@ func (w *JobWatcher) RunOnce(ctx context.Context) {
 	// Netflix: every live posting's page each run — the posting date the site
 	// shows is only there, and a repost moves it. LinkedIn: each posting's
 	// page once (its list already dates it), a few per run.
-	w.runSource(ctx, SourceNetflix, w.listNetflix, w.netflixDetail, true, 0)
-	w.runSource(ctx, SourceLinkedIn, w.listLinkedIn, w.linkedInDetail, false, jobsLinkedInDetails)
+	// (Netflix's search is already remote-only; LinkedIn's covers every US
+	// office, so its postings are kept to New York + country-wide.)
+	w.runSource(ctx, SourceNetflix, w.listNetflix, w.netflixDetail, nil, true, 0)
+	w.runSource(ctx, SourceLinkedIn, w.listLinkedIn, w.linkedInDetail, wantedLinkedInPlace, false, jobsLinkedInDetails)
 }
 
 func (w *JobWatcher) runSource(ctx context.Context, source string,
 	list func(context.Context) ([]Listing, error), detail func(context.Context, Listing) (Detail, error),
-	refresh bool, maxDetails int) {
+	place func(string) bool, refresh bool, maxDetails int) {
 	all, err := list(ctx)
 	if err != nil {
 		log.Printf("[jobs] %s: %v", source, err)
@@ -118,14 +120,22 @@ func (w *JobWatcher) runSource(ctx context.Context, source string,
 		return
 	}
 	seen := map[string]bool{}
-	var kept []Listing
+	var (
+		kept     []Listing
+		unwanted []string // the level fits, the role or place doesn't
+	)
 	for _, l := range all {
-		if wantedLevel(l.Title) && !seen[l.ExternalID] {
-			seen[l.ExternalID] = true
-			kept = append(kept, l)
+		if !wantedLevel(l.Title) || seen[l.ExternalID] {
+			continue
 		}
+		seen[l.ExternalID] = true
+		if unwantedRole(l.Title) || (place != nil && !place(l.Location)) {
+			unwanted = append(unwanted, l.ExternalID)
+			continue
+		}
+		kept = append(kept, l)
 	}
-	added, err := w.store.SaveListings(source, kept)
+	added, err := w.store.SaveListings(source, kept, unwanted)
 	if err != nil {
 		log.Printf("[jobs] %s: save: %v", source, err)
 		_ = w.store.RecordJobFetch(source, false, "save failed", 0)
@@ -279,10 +289,12 @@ func (w *JobWatcher) linkedInDetail(ctx context.Context, l Listing) (Detail, err
 // ---- storage -----------------------------------------------------------------
 
 // SaveListings records a successful fetch: roles and postings upserted
-// (a posting that was gone and is back is live again), and the source's
-// live postings it didn't find marked gone. Returns how many postings were
-// new.
-func (s *Store) SaveListings(source string, ls []Listing) (int, error) {
+// (a posting that was gone and is back is live again), postings filtered
+// out (drop: an unwanted role or place) deleted — not gone: they're still
+// up, just not wanted — and the source's live postings it didn't find
+// marked gone.
+// Returns how many postings were new.
+func (s *Store) SaveListings(source string, ls []Listing, drop []string) (int, error) {
 	ctx, cancel := withCtx()
 	defer cancel()
 	tx, err := s.pool.Begin(ctx)
@@ -290,6 +302,11 @@ func (s *Store) SaveListings(source string, ls []Listing) (int, error) {
 		return 0, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if len(drop) > 0 {
+		if _, err := tx.Exec(ctx, `DELETE FROM sxiva_job_listing WHERE source = $1 AND external_id = ANY($2)`, source, drop); err != nil {
+			return 0, err
+		}
+	}
 	added := 0
 	ids := make([]string, 0, len(ls))
 	for _, l := range ls {
@@ -321,8 +338,9 @@ func (s *Store) SaveListings(source string, ls []Listing) (int, error) {
 		WHERE source = $1 AND gone_at IS NULL AND NOT (external_id = ANY($2))`, source, ids); err != nil {
 		return 0, err
 	}
-	// A retitled posting moves to its new title's role; the old role, with
-	// nothing posting it and no marks, goes.
+	// A retitled posting moves to its new title's role; the old role (or a
+	// role whose postings were all dropped), with nothing posting it and no
+	// marks, goes.
 	if _, err := tx.Exec(ctx, `
 		DELETE FROM sxiva_job_role r WHERE NOT r.favorite AND NOT r.hidden
 		  AND NOT EXISTS (SELECT 1 FROM sxiva_job_listing l WHERE l.role_id = r.role_id)`); err != nil {

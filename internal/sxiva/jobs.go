@@ -123,6 +123,33 @@ func wantedLevel(title string) bool {
 	return false
 }
 
+var iosRe = regexp.MustCompile(`(?i)\bios\b`)
+
+// unwantedRole: roles Andrew doesn't want from any source — iOS.
+func unwantedRole(title string) bool {
+	return iosRe.MatchString(title)
+}
+
+var (
+	newYorkRe     = regexp.MustCompile(`(?i)new york|\bnyc\b`)
+	placeNoiseRe  = regexp.MustCompile(`(?i)\bremote\b|[(),.\-–—]`)
+	countryLabels = map[string]bool{"us": true, "usa": true, "united states": true, "united states of america": true}
+)
+
+// wantedLinkedInPlace: LinkedIn's US search also lists on-site jobs in
+// Los Gatos, LA, Seattle…; Andrew wants New York only, so a posting stays
+// when its location mentions New York / NYC, is just the country ("United
+// States", "US", "USA" — how LinkedIn labels Netflix's remote US jobs; a
+// "Remote" beside it is fine), or is missing. "Los Gatos, CA, United
+// States" names a city: dropped.
+func wantedLinkedInPlace(location string) bool {
+	if newYorkRe.MatchString(location) {
+		return true
+	}
+	bare := strings.ToLower(strings.Join(strings.Fields(placeNoiseRe.ReplaceAllString(location, " ")), " "))
+	return bare == "" || countryLabels[bare]
+}
+
 var salaryRe = regexp.MustCompile(`\$\s?([\d,]+(?:\.\d+)?)\s*(?:-|–|—|to)\s*\$\s?([\d,]+(?:\.\d+)?)`)
 
 // parseSalary finds the first "$X - $Y" range in text ("The range for

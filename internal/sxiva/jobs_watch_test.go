@@ -28,6 +28,7 @@ type fakeSources struct {
 	netflixList    []byte
 	netflixEmpty   []byte
 	postingDates   map[string]string // Netflix id → the page's Job Posting Date (else none)
+	linkedInList   atomic.Value      // the LinkedIn search's first page (string)
 	linkedInPages  atomic.Int32
 }
 
@@ -75,7 +76,7 @@ func (f *fakeSources) handler(t *testing.T) http.Handler {
 	})
 	mux.HandleFunc("/jobs-guest/jobs/api/seeMoreJobPostings/search", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("start") == "0" {
-			_, _ = w.Write(fixture(t, "linkedin-list.html"))
+			_, _ = w.Write([]byte(f.linkedInList.Load().(string)))
 		}
 	})
 	mux.HandleFunc("/jobs-guest/jobs/api/jobPosting/", func(w http.ResponseWriter, _ *http.Request) {
@@ -115,6 +116,15 @@ func findRole(roles []JobRoleView, title string) *JobRoleView {
 	return nil
 }
 
+// linkedInCard copies the fixture's card for posting from as posting to,
+// with replacements (old, new, …) applied — another posting to list.
+func linkedInCard(list, from, to string, replace ...string) string {
+	i := strings.Index(list, from)
+	start := strings.LastIndex(list[:i], "<li>")
+	end := i + strings.Index(list[i:], "</li>") + len("</li>")
+	return strings.NewReplacer(replace...).Replace(strings.ReplaceAll(list[start:end], from, to))
+}
+
 func TestJobWatcherEndToEnd(t *testing.T) {
 	store := jobsTestStore(t)
 	fake := &fakeSources{
@@ -122,6 +132,14 @@ func TestJobWatcherEndToEnd(t *testing.T) {
 		netflixEmpty: []byte(`{"count": 65, "positions": []}`),
 		postingDates: map[string]string{"790318043838": "10-23-2026"}, // TV Product UI, reposted
 	}
+	// The captured LinkedIn page (Agent Platform, Model Serving, iOS — all
+	// "United States" — and Ads Agent in New York), plus TV Product UI
+	// (Netflix posts it too) and an SE6 role in Los Gatos.
+	list := string(fixture(t, "linkedin-list.html"))
+	list += linkedInCard(list, "4454674339", "4454674999", "Software Engineer 5 - iOS", "Software Engineer 5 - TV Product UI")
+	list += linkedInCard(list, "4468375380", "4468375999",
+		"Software Engineering 5 - Ads Agent (Agentic Platform for Enterprise)", "Software Engineer 6 - Creative Studio", "New York, NY", "Los Gatos, CA")
+	fake.linkedInList.Store(list)
 	fake.dropNetflix.Store("")
 	fake.linkedInPaused.Store(true)
 	srv := httptest.NewServer(fake.handler(t))
@@ -139,7 +157,7 @@ func TestJobWatcherEndToEnd(t *testing.T) {
 	fake.linkedInPaused.Store(false)
 	w.RunOnce(ctx)
 	if n := fake.linkedInPages.Load(); n != 5 {
-		t.Errorf("%d LinkedIn page requests, want 1 + 4 (each posting's page once)", n)
+		t.Errorf("%d LinkedIn page requests, want 1 + 4 (each kept posting's page once; none for iOS or Los Gatos)", n)
 	}
 	w.RunOnce(ctx)
 	if n := fake.linkedInPages.Load(); n != 5 {
@@ -153,34 +171,35 @@ func TestJobWatcherEndToEnd(t *testing.T) {
 	if len(checks) != 2 || checks[0].Source != SourceNetflix || !checks[0].OK || !checks[1].OK {
 		t.Fatalf("checks %+v", checks)
 	}
-	// 6 Netflix positions + 4 LinkedIn cards, "Software Engineer 5 - iOS" on both.
-	if len(roles) != 9 {
-		t.Fatalf("%d roles, want 9 (sources combined)", len(roles))
+	// Netflix: 6 positions but iOS = 5. LinkedIn: 6 cards but iOS and Los
+	// Gatos = 4, TV Product UI shared with Netflix.
+	if len(roles) != 8 {
+		t.Fatalf("%d roles, want 8 (no iOS, nothing in Los Gatos, sources combined)", len(roles))
 	}
-	ios := findRole(roles, "Software Engineer 5 - iOS")
-	if ios == nil || len(ios.Postings) != 2 || ios.Postings[0].Source != SourceNetflix || ios.Postings[1].Source != SourceLinkedIn {
-		t.Fatalf("iOS role should combine both sources: %+v", ios)
-	}
-	if ios.SalaryMin == nil || *ios.SalaryMin != 320000 || *ios.SalaryMax != 500000 {
-		t.Errorf("iOS salary from Netflix's page: %v-%v", ios.SalaryMin, ios.SalaryMax)
-	}
-	if ios.PostedAt.Format("2006-01-02") != "2026-10-26" || ios.PostedAt.Location() != time.UTC ||
-		ios.Postings[0].PostedAt.Format("2006-01-02") != "2026-08-21" || ios.Postings[1].PostedAt.Format("2006-01-02") != "2026-10-26" {
-		t.Errorf("iOS posted %v (postings %v, %v): want the latest posting, LinkedIn's 2026-10-26", ios.PostedAt, ios.Postings[0].PostedAt, ios.Postings[1].PostedAt)
-	}
-	if ios.Postings[0].Description != "" || ios.Postings[0].Meta != nil {
-		t.Error("the roles list leaves descriptions to the single-role view")
+	if findRole(roles, "Software Engineer 5 - iOS") != nil || findRole(roles, "Software Engineer 6 - Creative Studio") != nil {
+		t.Fatal("iOS (either source) and LinkedIn's Los Gatos role must be filtered out")
 	}
 	tv := findRole(roles, "Software Engineer 5 - TV Product UI")
-	if tv == nil || tv.PostedAt.Format("2006-01-02") != "2026-10-23" {
-		t.Errorf("TV Product UI posted %v: want its page's Job Posting Date 2026-10-23, not t_create", tv.PostedAt)
+	if tv == nil || len(tv.Postings) != 2 || tv.Postings[0].Source != SourceNetflix || tv.Postings[1].Source != SourceLinkedIn {
+		t.Fatalf("TV Product UI should combine both sources: %+v", tv)
 	}
-	if roles[0].Title != ios.Title || roles[1].Title != tv.Title {
+	if tv.SalaryMin == nil || *tv.SalaryMin != 320000 || *tv.SalaryMax != 500000 {
+		t.Errorf("salary from Netflix's page: %v-%v", tv.SalaryMin, tv.SalaryMax)
+	}
+	if tv.PostedAt.Format("2006-01-02") != "2026-10-26" || tv.PostedAt.Location() != time.UTC ||
+		tv.Postings[0].PostedAt.Format("2006-01-02") != "2026-10-23" || tv.Postings[1].PostedAt.Format("2006-01-02") != "2026-10-26" {
+		t.Errorf("posted %v (postings %v, %v): want Netflix's page date 2026-10-23 (not t_create 08-21) and the role at its latest posting, LinkedIn's 2026-10-26",
+			tv.PostedAt, tv.Postings[0].PostedAt, tv.Postings[1].PostedAt)
+	}
+	if tv.Postings[0].Description != "" || tv.Postings[0].Meta != nil {
+		t.Error("the roles list leaves descriptions to the single-role view")
+	}
+	if roles[0].Title != tv.Title || roles[1].Title != "Software Engineer 4/5 – Model Serving Systems, AI Platform" {
 		t.Errorf("newest first: %q, %q", roles[0].Title, roles[1].Title)
 	}
 	li := findRole(roles, "Software Engineering 5 - Ads Agent (Agentic Platform for Enterprise)")
 	if li == nil || len(li.Postings) != 1 || li.SalaryMin == nil || len(li.Locations) != 1 || li.Locations[0] != "New York, NY" {
-		t.Fatalf("LinkedIn-only role: %+v", li)
+		t.Fatalf("LinkedIn-only New York role: %+v", li)
 	}
 	for i := 1; i < len(roles); i++ {
 		if roles[i].PostedAt.After(*roles[i-1].PostedAt) {
@@ -189,7 +208,7 @@ func TestJobWatcherEndToEnd(t *testing.T) {
 	}
 
 	// One role in full: each source's description and details.
-	full, err := store.JobRole(ios.RoleID)
+	full, err := store.JobRole(tv.RoleID)
 	if err != nil || full == nil || len(full.Postings) != 2 {
 		t.Fatalf("JobRole: %+v %v", full, err)
 	}
@@ -210,14 +229,29 @@ func TestJobWatcherEndToEnd(t *testing.T) {
 		t.Errorf("limit: %d %v", len(few), err)
 	}
 
-	// A Netflix posting disappears: its posting is gone; a Netflix-only
-	// role is gone, the iOS role stays live through LinkedIn.
-	fake.dropNetflix.Store("790318041034") // iOS on Netflix's site
+	// A kept posting that moves somewhere unwanted is dropped outright — not
+	// "gone" (it's still up, just not wanted), so no red card.
+	fake.linkedInList.Store(strings.Replace(list, "New York, NY", "Los Angeles, CA", 1))
 	w.RunOnce(ctx)
 	roles, _, _ = store.JobsView()
-	ios = findRole(roles, "Software Engineer 5 - iOS")
-	if ios.GoneAt != nil || ios.Postings[0].GoneAt == nil || ios.Postings[1].GoneAt != nil {
-		t.Errorf("iOS after Netflix drops it: role gone %v, postings %+v", ios.GoneAt, ios.Postings)
+	if findRole(roles, "Software Engineering 5 - Ads Agent (Agentic Platform for Enterprise)") != nil || len(roles) != 7 {
+		t.Fatalf("Ads Agent moved to Los Angeles: should be dropped, %d roles left", len(roles))
+	}
+	for _, r := range roles {
+		if r.GoneAt != nil {
+			t.Errorf("%q is gone — filtering must not mark anything gone", r.Title)
+		}
+	}
+	fake.linkedInList.Store(list)
+
+	// A Netflix posting disappears: its posting is gone; a Netflix-only
+	// role is gone, TV Product UI stays live through LinkedIn.
+	fake.dropNetflix.Store("790318043838") // TV Product UI on Netflix's site
+	w.RunOnce(ctx)
+	roles, _, _ = store.JobsView()
+	tv = findRole(roles, "Software Engineer 5 - TV Product UI")
+	if tv.GoneAt != nil || tv.Postings[0].GoneAt == nil || tv.Postings[1].GoneAt != nil {
+		t.Errorf("TV Product UI after Netflix drops it: role gone %v, postings %+v", tv.GoneAt, tv.Postings)
 	}
 	fake.dropNetflix.Store("790318081427") // Netflix-only: Model Development…
 	w.RunOnce(ctx)
@@ -226,8 +260,8 @@ func TestJobWatcherEndToEnd(t *testing.T) {
 	if md == nil || md.GoneAt == nil {
 		t.Fatalf("a role no source lists any more is gone: %+v", md)
 	}
-	if ios = findRole(roles, "Software Engineer 5 - iOS"); ios.Postings[0].GoneAt != nil {
-		t.Error("the Netflix iOS posting came back — it should be live again")
+	if tv = findRole(roles, "Software Engineer 5 - TV Product UI"); tv.Postings[0].GoneAt != nil {
+		t.Error("the Netflix TV Product UI posting came back — it should be live again")
 	}
 
 	// A failed fetch changes nothing.
@@ -245,15 +279,15 @@ func TestJobWatcherEndToEnd(t *testing.T) {
 
 	// Marks.
 	yes := true
-	if ok, err := store.UpdateJobRole(ios.RoleID, &yes, nil); err != nil || !ok {
+	if ok, err := store.UpdateJobRole(tv.RoleID, &yes, nil); err != nil || !ok {
 		t.Fatalf("favorite: %v %v", ok, err)
 	}
-	if ok, err := store.UpdateJobRole(ios.RoleID, nil, &yes); err != nil || !ok {
+	if ok, err := store.UpdateJobRole(tv.RoleID, nil, &yes); err != nil || !ok {
 		t.Fatalf("hide: %v %v", ok, err)
 	}
 	roles, _, _ = store.JobsView()
-	if ios = findRole(roles, "Software Engineer 5 - iOS"); !ios.Favorite || !ios.Hidden {
-		t.Errorf("marks: %+v", ios)
+	if tv = findRole(roles, "Software Engineer 5 - TV Product UI"); !tv.Favorite || !tv.Hidden {
+		t.Errorf("marks: %+v", tv)
 	}
 	if ok, _ := store.UpdateJobRole("00000000-0000-5000-8000-000000000000", &yes, nil); ok {
 		t.Error("unknown role must report false")
