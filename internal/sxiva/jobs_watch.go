@@ -13,8 +13,10 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -42,19 +44,22 @@ type JobWatcher struct {
 	client       *http.Client
 	careersBase  string
 	linkedInBase string
-	pause        time.Duration // between requests, to be polite
-	linkedInWait time.Duration // LinkedIn rate-limits quickly: slower still
+	pause        time.Duration   // between requests, to be polite
+	linkedInWait time.Duration   // LinkedIn rate-limits quickly: slower still
+	backoff      []time.Duration // waits before retrying a 429
 	running      atomic.Bool
 }
 
 func NewJobWatcher(store *Store) *JobWatcher {
+	jar, _ := cookiejar.New(nil) // keep the cookies a site hands out, like a browser
 	return &JobWatcher{
 		store:        store,
-		client:       &http.Client{Timeout: 20 * time.Second},
+		client:       &http.Client{Timeout: 20 * time.Second, Jar: jar},
 		careersBase:  "https://explore.jobs.netflix.net",
 		linkedInBase: "https://www.linkedin.com",
 		pause:        time.Second,
 		linkedInWait: 3 * time.Second,
+		backoff:      []time.Duration{15 * time.Second, 45 * time.Second},
 	}
 }
 
@@ -138,33 +143,67 @@ func (w *JobWatcher) runSource(ctx context.Context, source string,
 	log.Printf("[jobs] %s: %d roles (%d new), %d salaries read", source, len(kept), added, len(need))
 }
 
-// get fetches a URL politely; anything but a 200 is an error.
+// get fetches a URL politely; a 429 is retried after w.backoff (or the
+// server's Retry-After); anything else but a 200 is an error.
 func (w *JobWatcher) get(ctx context.Context, u string) ([]byte, error) {
 	wait := w.pause
 	if strings.HasPrefix(u, w.linkedInBase) && w.linkedInWait > wait {
 		wait = w.linkedInWait
 	}
-	if wait > 0 {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(wait):
+	for attempt := 0; ; attempt++ {
+		if err := sleepCtx(ctx, wait); err != nil {
+			return nil, err
 		}
+		body, status, retryAfter, err := w.fetch(ctx, u)
+		if err != nil {
+			return nil, err
+		}
+		if status == http.StatusOK {
+			return body, nil
+		}
+		if status != http.StatusTooManyRequests || attempt >= len(w.backoff) {
+			return nil, fmt.Errorf("status %d from %s", status, strings.SplitN(u, "?", 2)[0])
+		}
+		wait = w.backoff[attempt]
+		if retryAfter > wait {
+			wait = retryAfter
+		}
+		log.Printf("[jobs] 429 from %s — retrying in %v", strings.SplitN(u, "?", 2)[0], wait)
 	}
+}
+
+func (w *JobWatcher) fetch(ctx context.Context, u string) (body []byte, status int, retryAfter time.Duration, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return nil, err
+		return nil, 0, 0, err
 	}
 	req.Header.Set("User-Agent", jobsUserAgent)
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
 	resp, err := w.client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, 0, 0, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("status %d from %s", resp.StatusCode, strings.SplitN(u, "?", 2)[0])
+	if s, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && s > 0 && s <= 300 {
+		retryAfter = time.Duration(s) * time.Second
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if resp.StatusCode != http.StatusOK {
+		return nil, resp.StatusCode, retryAfter, nil
+	}
+	body, err = io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	return body, resp.StatusCode, 0, err
+}
+
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return ctx.Err()
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(d):
+		return nil
+	}
 }
 
 func (w *JobWatcher) listCareers(ctx context.Context) ([]Listing, error) {

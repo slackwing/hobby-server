@@ -105,7 +105,7 @@ func TestJobWatcherEndToEnd(t *testing.T) {
 	srv := httptest.NewServer(fake.handler(t))
 	defer srv.Close()
 	w := NewJobWatcher(store)
-	w.careersBase, w.linkedInBase, w.pause, w.linkedInWait = srv.URL, srv.URL, 0, 0
+	w.careersBase, w.linkedInBase, w.pause, w.linkedInWait, w.backoff = srv.URL, srv.URL, 0, 0, nil
 	ctx := context.Background()
 
 	w.RunOnce(ctx)
@@ -187,5 +187,30 @@ func TestJobWatcherEndToEnd(t *testing.T) {
 	}
 	if ok, _ := store.UpdateJobRole("00000000-0000-5000-8000-000000000000", &yes, nil); ok {
 		t.Error("unknown role must report false")
+	}
+}
+
+// A 429 is retried after the backoff; past the retries it's an error.
+func TestJobWatcherRetries429(t *testing.T) {
+	var calls atomic.Int32
+	limitFor := int32(2)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) <= limitFor {
+			http.Error(w, "slow down", http.StatusTooManyRequests)
+			return
+		}
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+	w := NewJobWatcher(nil)
+	w.pause, w.linkedInWait, w.backoff = 0, 0, []time.Duration{time.Millisecond, time.Millisecond}
+	body, err := w.get(context.Background(), srv.URL+"/x")
+	if err != nil || string(body) != "ok" || calls.Load() != 3 {
+		t.Fatalf("two 429s then ok: body %q err %v calls %d", body, err, calls.Load())
+	}
+	calls.Store(0)
+	limitFor = 5
+	if _, err := w.get(context.Background(), srv.URL+"/x"); err == nil || !strings.Contains(err.Error(), "status 429") || calls.Load() != 3 {
+		t.Fatalf("past the retries: err %v calls %d", err, calls.Load())
 	}
 }
