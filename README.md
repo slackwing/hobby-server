@@ -100,7 +100,9 @@ description, details, salary range and the posting date the source shows:
 - `GET /api/sxiva/jobs/roles/{role_id}` — one role, its postings also
   carrying `description` (the source's HTML — sanitize before showing)
   and `meta` (`[{label, value}]`)
-- `PATCH /api/sxiva/jobs/roles/{role_id}` `{favorite?, hidden?}`
+- `PATCH /api/sxiva/jobs/roles/{role_id}` `{favorite?, hidden?, seen?}` —
+  `seen: true` stamps `seen_at` (roles carry it) so the page stops
+  highlighting a new role once Andrew has acted on it
 - `POST /api/sxiva/jobs/refresh` — check the sources now
 
 Bearer `sync_token` (the sxiva CLI):

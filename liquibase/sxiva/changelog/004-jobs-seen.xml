@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        seen_at: when Andrew last starred, hid or opened the role. The page
+        highlights a new role (posted today/yesterday) only until then — a
+        posting dated after it (a repost) highlights it again.
+    -->
+
+    <changeSet id="004-jobs-seen" author="sxiva">
+        <addColumn tableName="sxiva_job_role">
+            <column name="seen_at" type="TIMESTAMPTZ"/>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

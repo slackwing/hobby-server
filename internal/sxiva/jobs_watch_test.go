@@ -279,17 +279,28 @@ func TestJobWatcherEndToEnd(t *testing.T) {
 
 	// Marks.
 	yes := true
-	if ok, err := store.UpdateJobRole(tv.RoleID, &yes, nil); err != nil || !ok {
+	if tv.SeenAt != nil {
+		t.Errorf("never touched, yet seen at %v", tv.SeenAt)
+	}
+	if ok, err := store.UpdateJobRole(tv.RoleID, &yes, nil, &yes); err != nil || !ok {
 		t.Fatalf("favorite: %v %v", ok, err)
 	}
-	if ok, err := store.UpdateJobRole(tv.RoleID, nil, &yes); err != nil || !ok {
+	if ok, err := store.UpdateJobRole(tv.RoleID, nil, &yes, nil); err != nil || !ok {
 		t.Fatalf("hide: %v %v", ok, err)
 	}
 	roles, _, _ = store.JobsView()
-	if tv = findRole(roles, "Software Engineer 5 - TV Product UI"); !tv.Favorite || !tv.Hidden {
+	if tv = findRole(roles, "Software Engineer 5 - TV Product UI"); !tv.Favorite || !tv.Hidden || tv.SeenAt == nil || time.Since(*tv.SeenAt) > time.Minute {
 		t.Errorf("marks: %+v", tv)
 	}
-	if ok, _ := store.UpdateJobRole("00000000-0000-5000-8000-000000000000", &yes, nil); ok {
+	no := false
+	if ok, err := store.UpdateJobRole(tv.RoleID, nil, nil, &no); err != nil || !ok {
+		t.Fatalf("unsee: %v %v", ok, err)
+	}
+	roles, _, _ = store.JobsView()
+	if tv = findRole(roles, "Software Engineer 5 - TV Product UI"); tv.SeenAt != nil || !tv.Favorite || !tv.Hidden {
+		t.Errorf("seen false clears seen_at only: %+v", tv)
+	}
+	if ok, _ := store.UpdateJobRole("00000000-0000-5000-8000-000000000000", &yes, nil, nil); ok {
 		t.Error("unknown role must report false")
 	}
 }

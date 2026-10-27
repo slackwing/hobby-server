@@ -14,5 +14,6 @@
     <include file="changelog/001-initial-schema.xml"/>
     <include file="changelog/002-jobs.xml"/>
     <include file="changelog/003-jobs-details.xml"/>
+    <include file="changelog/004-jobs-seen.xml"/>
 
 </databaseChangeLog>

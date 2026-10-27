@@ -6,7 +6,7 @@ package sxiva
 //
 //	GET   /jobs                    every role (live, gone, hidden), sources combined
 //	GET   /jobs/roles/{role_id}    one role, with each posting's description and details
-//	PATCH /jobs/roles/{role_id}    {favorite?, hidden?}
+//	PATCH /jobs/roles/{role_id}    {favorite?, hidden?, seen?}
 //	POST  /jobs/refresh            check the sources now
 
 import (
@@ -84,12 +84,13 @@ func handleJobRole(store *Store) http.HandlerFunc {
 		var body struct {
 			Favorite *bool `json:"favorite"`
 			Hidden   *bool `json:"hidden"`
+			Seen     *bool `json:"seen"`
 		}
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&body); err != nil || (body.Favorite == nil && body.Hidden == nil) {
-			writeError(w, http.StatusBadRequest, "send favorite and/or hidden")
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&body); err != nil || (body.Favorite == nil && body.Hidden == nil && body.Seen == nil) {
+			writeError(w, http.StatusBadRequest, "send favorite, hidden and/or seen")
 			return
 		}
-		ok, err := store.UpdateJobRole(roleID, body.Favorite, body.Hidden)
+		ok, err := store.UpdateJobRole(roleID, body.Favorite, body.Hidden, body.Seen)
 		if err != nil {
 			log.Printf("[jobs] update %s: %v", roleID, err)
 			writeError(w, http.StatusInternalServerError, "internal error")

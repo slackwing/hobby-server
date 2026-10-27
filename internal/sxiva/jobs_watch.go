@@ -428,6 +428,7 @@ type JobRoleView struct {
 	Title     string           `json:"title"`
 	Favorite  bool             `json:"favorite"`
 	Hidden    bool             `json:"hidden"`
+	SeenAt    *time.Time       `json:"seen_at"`   // Andrew last starred, hid or opened it
 	PostedAt  *time.Time       `json:"posted_at"` // latest posting still up (or ever, once gone)
 	GoneAt    *time.Time       `json:"gone_at"`   // set once every source dropped it: the last to go
 	SalaryMin *int             `json:"salary_min"`
@@ -495,7 +496,7 @@ func (s *Store) JobRole(roleID string) (*JobRoleView, error) {
 // descriptions and details only when full).
 func (s *Store) jobRoles(ctx context.Context, roleID string, full bool) ([]JobRoleView, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT r.role_id::text, r.title, r.favorite, r.hidden,
+		SELECT r.role_id::text, r.title, r.favorite, r.hidden, r.seen_at,
 		       l.source, l.title, l.url, l.location, COALESCE(l.detail_posted_at, l.posted_at), l.gone_at,
 		       l.salary_min, l.salary_max,
 		       CASE WHEN $2 THEN l.description ELSE '' END, CASE WHEN $2 THEN l.meta ELSE '[]'::jsonb END
@@ -514,7 +515,7 @@ func (s *Store) jobRoles(ctx context.Context, roleID string, full bool) ([]JobRo
 			p    JobPostingView
 			meta []byte
 		)
-		if err := rows.Scan(&v.RoleID, &v.Title, &v.Favorite, &v.Hidden,
+		if err := rows.Scan(&v.RoleID, &v.Title, &v.Favorite, &v.Hidden, &v.SeenAt,
 			&p.Source, &p.Title, &p.URL, &p.Location, &p.PostedAt, &p.GoneAt, &p.SalaryMin, &p.SalaryMax,
 			&p.Description, &meta); err != nil {
 			return nil, err
@@ -588,13 +589,15 @@ func summarizeRole(v JobRoleView) JobRoleView {
 	return v
 }
 
-// UpdateJobRole sets a role's marks; false when there's no such role.
-func (s *Store) UpdateJobRole(roleID string, favorite, hidden *bool) (bool, error) {
+// UpdateJobRole sets a role's marks (nil = unchanged; seen true stamps
+// seen_at now, false clears it); false when there's no such role.
+func (s *Store) UpdateJobRole(roleID string, favorite, hidden, seen *bool) (bool, error) {
 	ctx, cancel := withCtx()
 	defer cancel()
 	tag, err := s.pool.Exec(ctx, `
-		UPDATE sxiva_job_role SET favorite = COALESCE($2, favorite), hidden = COALESCE($3, hidden), updated_at = NOW()
-		WHERE role_id = $1::uuid`, roleID, favorite, hidden)
+		UPDATE sxiva_job_role SET favorite = COALESCE($2, favorite), hidden = COALESCE($3, hidden),
+			seen_at = CASE WHEN $4::boolean IS NULL THEN seen_at WHEN $4 THEN NOW() END, updated_at = NOW()
+		WHERE role_id = $1::uuid`, roleID, favorite, hidden, seen)
 	if err != nil {
 		return false, err
 	}
