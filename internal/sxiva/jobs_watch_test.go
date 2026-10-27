@@ -171,13 +171,15 @@ func TestJobWatcherEndToEnd(t *testing.T) {
 	if len(checks) != 2 || checks[0].Source != SourceNetflix || !checks[0].OK || !checks[1].OK {
 		t.Fatalf("checks %+v", checks)
 	}
-	// Netflix: 6 positions but iOS = 5. LinkedIn: 6 cards but iOS and Los
-	// Gatos = 4, TV Product UI shared with Netflix.
-	if len(roles) != 8 {
-		t.Fatalf("%d roles, want 8 (no iOS, nothing in Los Gatos, sources combined)", len(roles))
+	// Netflix: 6 positions but iOS and Android = 4. LinkedIn: 6 cards but
+	// iOS and Los Gatos = 4, TV Product UI shared with Netflix.
+	if len(roles) != 7 {
+		t.Fatalf("%d roles, want 7 (no iOS / Android, nothing in Los Gatos, sources combined)", len(roles))
 	}
-	if findRole(roles, "Software Engineer 5 - iOS") != nil || findRole(roles, "Software Engineer 6 - Creative Studio") != nil {
-		t.Fatal("iOS (either source) and LinkedIn's Los Gatos role must be filtered out")
+	for _, title := range []string{"Software Engineer 5 - iOS", "Software Engineer 5 - Android", "Software Engineer 6 - Creative Studio"} {
+		if findRole(roles, title) != nil {
+			t.Fatalf("%q must be filtered out (iOS / Android from either source; LinkedIn in Los Gatos)", title)
+		}
 	}
 	tv := findRole(roles, "Software Engineer 5 - TV Product UI")
 	if tv == nil || len(tv.Postings) != 2 || tv.Postings[0].Source != SourceNetflix || tv.Postings[1].Source != SourceLinkedIn {
@@ -234,7 +236,7 @@ func TestJobWatcherEndToEnd(t *testing.T) {
 	fake.linkedInList.Store(strings.Replace(list, "New York, NY", "Los Angeles, CA", 1))
 	w.RunOnce(ctx)
 	roles, _, _ = store.JobsView()
-	if findRole(roles, "Software Engineering 5 - Ads Agent (Agentic Platform for Enterprise)") != nil || len(roles) != 7 {
+	if findRole(roles, "Software Engineering 5 - Ads Agent (Agentic Platform for Enterprise)") != nil || len(roles) != 6 {
 		t.Fatalf("Ads Agent moved to Los Angeles: should be dropped, %d roles left", len(roles))
 	}
 	for _, r := range roles {

@@ -123,11 +123,13 @@ func wantedLevel(title string) bool {
 	return false
 }
 
-var iosRe = regexp.MustCompile(`(?i)\bios\b`)
+var unwantedTitleRe = regexp.MustCompile(`(?i)\b(ios|android|security)\b`)
 
-// unwantedRole: roles Andrew doesn't want from any source — iOS.
+// unwantedRole: roles Andrew doesn't want from any source — iOS, Android,
+// Security — judged by the title alone (a description that mentions
+// security doesn't count).
 func unwantedRole(title string) bool {
-	return iosRe.MatchString(title)
+	return unwantedTitleRe.MatchString(title)
 }
 
 var (

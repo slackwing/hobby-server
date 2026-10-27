@@ -98,11 +98,16 @@ func TestFilters(t *testing.T) {
 		}
 	}
 	roles := map[string]bool{
-		"Software Engineer 5 - iOS":             true,
-		"Software Engineer 5 – IOS Platform":    true,
-		"Software Engineer 6 - Mobile (iOS)":    true,
-		"Software Engineer 5 - Android":         false,
-		"Software Engineer 5 - Netflix Studios": false, // "ios" inside a word
+		"Software Engineer 5 - iOS":                    true,
+		"Software Engineer 5 – IOS Platform":           true,
+		"Software Engineer 6 - Mobile (iOS)":           true,
+		"Software Engineer 5 - Android":                true,
+		"Software Engineer 5 - Mobile (Android/iOS)":   true,
+		"Security Software Engineer 5":                 true,
+		"Software Engineer (L6), Platform Security":    true,
+		"Software Engineer 5 - Netflix Studios":        false, // "ios" inside a word
+		"Software Engineer 5 - TV Product UI":          false,
+		"Software Engineer 6 - Ads Identity & Privacy": false,
 	}
 	for title, want := range roles {
 		if got := unwantedRole(title); got != want {
