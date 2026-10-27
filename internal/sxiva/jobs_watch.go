@@ -3,11 +3,13 @@ package sxiva
 // The Netflix roles watcher's fetching and storage (pure parts: jobs.go).
 // Hourly, per source: list SE5 + SE6 postings, keep the wanted levels,
 // save them (new roles, postings that came back, postings that are gone),
-// then read each new posting's detail page once for its salary range. A
-// failed list fetch changes nothing but the source's last-check row.
+// then read posting pages for the description, details, salary range and
+// (Netflix) the displayed posting date. A failed list fetch changes nothing
+// but the source's last-check row.
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -29,10 +31,13 @@ const (
 	jobsCompany      = "Netflix"
 	jobsLinkedInCo   = "165158"    // LinkedIn company id (f_C)
 	jobsLinkedInGeo  = "103644278" // United States (geoId)
-	jobsCareersPages = 15
+	jobsNetflixPages = 15
 	jobsLinkedInPage = 10 // cards per page
 	jobsLinkedInMax  = 10 // pages
 	jobsStartDelay   = 30 * time.Second
+	// LinkedIn pages read per run: new postings fill in over a few hours
+	// instead of in one burst LinkedIn would answer with 429s.
+	jobsLinkedInDetails = 10
 )
 
 // jobsQueries: one search per wanted level on each source.
@@ -42,7 +47,7 @@ var jobsQueries = []string{"Software Engineer 5", "Software Engineer 6"}
 type JobWatcher struct {
 	store        *Store
 	client       *http.Client
-	careersBase  string
+	netflixBase  string
 	linkedInBase string
 	pause        time.Duration   // between requests, to be polite
 	linkedInWait time.Duration   // LinkedIn rate-limits quickly: slower still
@@ -55,10 +60,10 @@ func NewJobWatcher(store *Store) *JobWatcher {
 	return &JobWatcher{
 		store:        store,
 		client:       &http.Client{Timeout: 20 * time.Second, Jar: jar},
-		careersBase:  "https://explore.jobs.netflix.net",
+		netflixBase:  "https://explore.jobs.netflix.net",
 		linkedInBase: "https://www.linkedin.com",
 		pause:        time.Second,
-		linkedInWait: 3 * time.Second,
+		linkedInWait: 6 * time.Second,
 		backoff:      []time.Duration{15 * time.Second, 45 * time.Second},
 	}
 }
@@ -94,12 +99,16 @@ func (w *JobWatcher) RunOnce(ctx context.Context) {
 		return
 	}
 	defer w.running.Store(false)
-	w.runSource(ctx, SourceCareers, w.listCareers, w.careersDetail)
-	w.runSource(ctx, SourceLinkedIn, w.listLinkedIn, w.linkedInDetail)
+	// Netflix: every live posting's page each run — the posting date the site
+	// shows is only there, and a repost moves it. LinkedIn: each posting's
+	// page once (its list already dates it), a few per run.
+	w.runSource(ctx, SourceNetflix, w.listNetflix, w.netflixDetail, true, 0)
+	w.runSource(ctx, SourceLinkedIn, w.listLinkedIn, w.linkedInDetail, false, jobsLinkedInDetails)
 }
 
 func (w *JobWatcher) runSource(ctx context.Context, source string,
-	list func(context.Context) ([]Listing, error), detail func(context.Context, Listing) (string, error)) {
+	list func(context.Context) ([]Listing, error), detail func(context.Context, Listing) (Detail, error),
+	refresh bool, maxDetails int) {
 	all, err := list(ctx)
 	if err != nil {
 		log.Printf("[jobs] %s: %v", source, err)
@@ -122,25 +131,28 @@ func (w *JobWatcher) runSource(ctx context.Context, source string,
 		_ = w.store.RecordJobFetch(source, false, "save failed", 0)
 		return
 	}
-	need, err := w.store.ListingsNeedingSalary(source)
+	need, err := w.store.ListingsNeedingDetail(source, refresh, maxDetails)
 	if err != nil {
-		log.Printf("[jobs] %s: salary list: %v", source, err)
+		log.Printf("[jobs] %s: detail list: %v", source, err)
 	}
+	read := 0
 	for _, l := range need {
-		text, err := detail(ctx, l)
+		d, err := detail(ctx, l)
 		if err != nil {
-			log.Printf("[jobs] %s %s: detail: %v", source, l.ExternalID, err)
+			log.Printf("[jobs] %s %s: detail: %v — the rest wait for the next run", source, l.ExternalID, err)
+			break
+		}
+		lo, hi := parseSalary(d.SalaryText)
+		if err := w.store.SetJobDetail(source, l.ExternalID, d, lo, hi); err != nil {
+			log.Printf("[jobs] %s %s: save detail: %v", source, l.ExternalID, err)
 			continue
 		}
-		lo, hi := parseSalary(text)
-		if err := w.store.SetJobSalary(source, l.ExternalID, lo, hi); err != nil {
-			log.Printf("[jobs] %s %s: salary: %v", source, l.ExternalID, err)
-		}
+		read++
 	}
 	if err := w.store.RecordJobFetch(source, true, "", len(kept)); err != nil {
 		log.Printf("[jobs] %s: record fetch: %v", source, err)
 	}
-	log.Printf("[jobs] %s: %d roles (%d new), %d salaries read", source, len(kept), added, len(need))
+	log.Printf("[jobs] %s: %d roles (%d new), %d of %d pages read", source, len(kept), added, read, len(need))
 }
 
 // get fetches a URL politely; a 429 is retried after w.backoff (or the
@@ -206,16 +218,16 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 	}
 }
 
-func (w *JobWatcher) listCareers(ctx context.Context) ([]Listing, error) {
+func (w *JobWatcher) listNetflix(ctx context.Context) ([]Listing, error) {
 	var out []Listing
 	for _, q := range jobsQueries {
-		for start, page := 0, 0; page < jobsCareersPages; page++ {
+		for start, page := 0, 0; page < jobsNetflixPages; page++ {
 			body, err := w.get(ctx, fmt.Sprintf("%s/api/apply/v2/jobs?domain=netflix.com&start=%d&num=10&query=%s&Work%%20Type=remote&sort_by=relevance",
-				w.careersBase, start, url.QueryEscape(strings.ToLower(q))))
+				w.netflixBase, start, url.QueryEscape(strings.ToLower(q))))
 			if err != nil {
 				return nil, err
 			}
-			count, ls, err := parseCareersList(body)
+			count, ls, err := parseNetflixList(body)
 			if err != nil {
 				return nil, err
 			}
@@ -229,12 +241,12 @@ func (w *JobWatcher) listCareers(ctx context.Context) ([]Listing, error) {
 	return out, nil
 }
 
-func (w *JobWatcher) careersDetail(ctx context.Context, l Listing) (string, error) {
-	body, err := w.get(ctx, fmt.Sprintf("%s/api/apply/v2/jobs/%s?domain=netflix.com", w.careersBase, url.PathEscape(l.ExternalID)))
+func (w *JobWatcher) netflixDetail(ctx context.Context, l Listing) (Detail, error) {
+	body, err := w.get(ctx, fmt.Sprintf("%s/api/apply/v2/jobs/%s?domain=netflix.com", w.netflixBase, url.PathEscape(l.ExternalID)))
 	if err != nil {
-		return "", err
+		return Detail{}, err
 	}
-	return parseCareersDetail(body)
+	return parseNetflixDetail(body)
 }
 
 func (w *JobWatcher) listLinkedIn(ctx context.Context) ([]Listing, error) {
@@ -256,12 +268,12 @@ func (w *JobWatcher) listLinkedIn(ctx context.Context) ([]Listing, error) {
 	return out, nil
 }
 
-func (w *JobWatcher) linkedInDetail(ctx context.Context, l Listing) (string, error) {
+func (w *JobWatcher) linkedInDetail(ctx context.Context, l Listing) (Detail, error) {
 	body, err := w.get(ctx, fmt.Sprintf("%s/jobs-guest/jobs/api/jobPosting/%s", w.linkedInBase, url.PathEscape(l.ExternalID)))
 	if err != nil {
-		return "", err
+		return Detail{}, err
 	}
-	return htmlText(string(body)), nil
+	return parseLinkedInDetail(body), nil
 }
 
 // ---- storage -----------------------------------------------------------------
@@ -309,21 +321,26 @@ func (s *Store) SaveListings(source string, ls []Listing) (int, error) {
 		WHERE source = $1 AND gone_at IS NULL AND NOT (external_id = ANY($2))`, source, ids); err != nil {
 		return 0, err
 	}
+	// A retitled posting moves to its new title's role; the old role, with
+	// nothing posting it and no marks, goes.
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM sxiva_job_role r WHERE NOT r.favorite AND NOT r.hidden
+		  AND NOT EXISTS (SELECT 1 FROM sxiva_job_listing l WHERE l.role_id = r.role_id)`); err != nil {
+		return 0, err
+	}
 	return added, tx.Commit(ctx)
 }
 
-// ListingsNeedingSalary: live postings whose detail page hasn't been read,
-// skipping roles another source already gave a range for (the careers site
-// runs first, so most LinkedIn postings need no extra request).
-func (s *Store) ListingsNeedingSalary(source string) ([]Listing, error) {
+// ListingsNeedingDetail: live postings whose page hasn't been read — or,
+// with refresh, every live posting — newest first, at most limit (0 = all).
+func (s *Store) ListingsNeedingDetail(source string, refresh bool, limit int) ([]Listing, error) {
 	ctx, cancel := withCtx()
 	defer cancel()
 	rows, err := s.pool.Query(ctx, `
-		SELECT l.external_id, l.title FROM sxiva_job_listing l
-		WHERE l.source = $1 AND l.gone_at IS NULL AND l.salary_checked_at IS NULL
-		  AND NOT EXISTS (SELECT 1 FROM sxiva_job_listing o
-		                  WHERE o.role_id = l.role_id AND o.salary_min IS NOT NULL)
-		ORDER BY l.first_seen_at`, source)
+		SELECT external_id, title FROM sxiva_job_listing
+		WHERE source = $1 AND gone_at IS NULL AND ($2 OR detail_at IS NULL)
+		ORDER BY first_seen_at DESC, external_id
+		LIMIT NULLIF($3, 0)`, source, refresh, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -339,14 +356,23 @@ func (s *Store) ListingsNeedingSalary(source string) ([]Listing, error) {
 	return out, rows.Err()
 }
 
-// SetJobSalary stores a posting's range (nil = none stated) and marks its
-// detail page as read.
-func (s *Store) SetJobSalary(source, externalID string, lo, hi *int) error {
+// SetJobDetail stores what a posting's page says: description, details,
+// salary range (nil = none stated) and the displayed posting date.
+func (s *Store) SetJobDetail(source, externalID string, d Detail, lo, hi *int) error {
 	ctx, cancel := withCtx()
 	defer cancel()
-	_, err := s.pool.Exec(ctx, `
-		UPDATE sxiva_job_listing SET salary_min = $3, salary_max = $4, salary_checked_at = NOW()
-		WHERE source = $1 AND external_id = $2`, source, externalID, lo, hi)
+	meta := d.Meta
+	if meta == nil {
+		meta = []MetaField{}
+	}
+	metaJSON, err := json.Marshal(meta)
+	if err != nil {
+		return err
+	}
+	_, err = s.pool.Exec(ctx, `
+		UPDATE sxiva_job_listing SET description = $3, meta = $4::jsonb, detail_posted_at = $5,
+			salary_min = $6, salary_max = $7, detail_at = NOW()
+		WHERE source = $1 AND external_id = $2`, source, externalID, d.Description, string(metaJSON), d.PostedAt, lo, hi)
 	return err
 }
 
@@ -362,13 +388,19 @@ func (s *Store) RecordJobFetch(source string, ok bool, errMsg string, found int)
 	return err
 }
 
-// JobPostingView is one source's posting of a role.
+// JobPostingView is one source's posting of a role. Description and Meta
+// come only with a single role (JobRole).
 type JobPostingView struct {
-	Source   string     `json:"source"`
-	URL      string     `json:"url"`
-	Location string     `json:"location"`
-	PostedAt *time.Time `json:"posted_at"`
-	GoneAt   *time.Time `json:"gone_at"`
+	Source      string      `json:"source"`
+	Title       string      `json:"title"`
+	URL         string      `json:"url"`
+	Location    string      `json:"location"`
+	PostedAt    *time.Time  `json:"posted_at"` // the date the source shows
+	GoneAt      *time.Time  `json:"gone_at"`
+	SalaryMin   *int        `json:"salary_min"`
+	SalaryMax   *int        `json:"salary_max"`
+	Description string      `json:"description,omitempty"`
+	Meta        []MetaField `json:"meta,omitempty"`
 }
 
 // JobRoleView is a role as the page shows it: one card, whatever sources
@@ -378,7 +410,7 @@ type JobRoleView struct {
 	Title     string           `json:"title"`
 	Favorite  bool             `json:"favorite"`
 	Hidden    bool             `json:"hidden"`
-	PostedAt  *time.Time       `json:"posted_at"` // earliest posting still up (or ever, once gone)
+	PostedAt  *time.Time       `json:"posted_at"` // latest posting still up (or ever, once gone)
 	GoneAt    *time.Time       `json:"gone_at"`   // set once every source dropped it: the last to go
 	SalaryMin *int             `json:"salary_min"`
 	SalaryMax *int             `json:"salary_max"`
@@ -394,13 +426,16 @@ type JobCheckView struct {
 	Error     string     `json:"error"`
 }
 
+// jobSources in display order: Netflix's own posting first.
+var jobSources = []string{SourceNetflix, SourceLinkedIn}
+
 // JobsView: every role ever seen (live, gone, hidden — the page decides
 // what to show), newest posting first, and each source's last check.
 func (s *Store) JobsView() ([]JobRoleView, []JobCheckView, error) {
 	ctx, cancel := withCtx()
 	defer cancel()
 	checks := []JobCheckView{}
-	for _, source := range []string{SourceCareers, SourceLinkedIn} {
+	for _, source := range jobSources {
 		c := JobCheckView{Source: source}
 		err := s.pool.QueryRow(ctx, `SELECT checked_at, ok, error FROM sxiva_job_fetch WHERE source = $1`, source).
 			Scan(&c.CheckedAt, &c.OK, &c.Error)
@@ -409,48 +444,9 @@ func (s *Store) JobsView() ([]JobRoleView, []JobCheckView, error) {
 		}
 		checks = append(checks, c)
 	}
-
-	rows, err := s.pool.Query(ctx, `
-		SELECT r.role_id::text, r.title, r.favorite, r.hidden,
-		       l.source, l.url, l.location, l.posted_at, l.gone_at, l.salary_min, l.salary_max
-		FROM sxiva_job_role r JOIN sxiva_job_listing l ON l.role_id = r.role_id
-		ORDER BY r.role_id, l.source`)
+	roles, err := s.jobRoles(ctx, "", false)
 	if err != nil {
 		return nil, nil, err
-	}
-	defer rows.Close()
-	byRole := map[string]*JobRoleView{}
-	var order []string
-	for rows.Next() {
-		var (
-			v          JobRoleView
-			p          JobPostingView
-			smin, smax *int
-		)
-		if err := rows.Scan(&v.RoleID, &v.Title, &v.Favorite, &v.Hidden,
-			&p.Source, &p.URL, &p.Location, &p.PostedAt, &p.GoneAt, &smin, &smax); err != nil {
-			return nil, nil, err
-		}
-		p.PostedAt, p.GoneAt = utc(p.PostedAt), utc(p.GoneAt) // dates mean UTC days
-		role := byRole[v.RoleID]
-		if role == nil {
-			v.Locations, v.Postings = []string{}, []JobPostingView{}
-			role = &v
-			byRole[v.RoleID] = role
-			order = append(order, v.RoleID)
-		}
-		role.Postings = append(role.Postings, p)
-		// careers sorts first: its stated range wins
-		if role.SalaryMin == nil && smin != nil {
-			role.SalaryMin, role.SalaryMax = smin, smax
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, nil, err
-	}
-	roles := make([]JobRoleView, 0, len(order))
-	for _, id := range order {
-		roles = append(roles, summarizeRole(*byRole[id]))
 	}
 	sort.SliceStable(roles, func(i, j int) bool {
 		a, b := roles[i].PostedAt, roles[j].PostedAt
@@ -465,6 +461,75 @@ func (s *Store) JobsView() ([]JobRoleView, []JobCheckView, error) {
 	return roles, checks, nil
 }
 
+// JobRole is one role with each posting's description and details; nil
+// when there's no such role.
+func (s *Store) JobRole(roleID string) (*JobRoleView, error) {
+	ctx, cancel := withCtx()
+	defer cancel()
+	roles, err := s.jobRoles(ctx, roleID, true)
+	if err != nil || len(roles) == 0 {
+		return nil, err
+	}
+	return &roles[0], nil
+}
+
+// jobRoles reads roles with their postings (all roles when roleID is "";
+// descriptions and details only when full).
+func (s *Store) jobRoles(ctx context.Context, roleID string, full bool) ([]JobRoleView, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT r.role_id::text, r.title, r.favorite, r.hidden,
+		       l.source, l.title, l.url, l.location, COALESCE(l.detail_posted_at, l.posted_at), l.gone_at,
+		       l.salary_min, l.salary_max,
+		       CASE WHEN $2 THEN l.description ELSE '' END, CASE WHEN $2 THEN l.meta ELSE '[]'::jsonb END
+		FROM sxiva_job_role r JOIN sxiva_job_listing l ON l.role_id = r.role_id
+		WHERE $1 = '' OR r.role_id::text = $1
+		ORDER BY r.role_id, array_position($3::text[], l.source::text), l.external_id`, roleID, full, jobSources)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	byRole := map[string]*JobRoleView{}
+	var order []string
+	for rows.Next() {
+		var (
+			v    JobRoleView
+			p    JobPostingView
+			meta []byte
+		)
+		if err := rows.Scan(&v.RoleID, &v.Title, &v.Favorite, &v.Hidden,
+			&p.Source, &p.Title, &p.URL, &p.Location, &p.PostedAt, &p.GoneAt, &p.SalaryMin, &p.SalaryMax,
+			&p.Description, &meta); err != nil {
+			return nil, err
+		}
+		if full {
+			if err := json.Unmarshal(meta, &p.Meta); err != nil {
+				return nil, err
+			}
+		}
+		p.PostedAt, p.GoneAt = utc(p.PostedAt), utc(p.GoneAt) // dates mean UTC days
+		role := byRole[v.RoleID]
+		if role == nil {
+			v.Locations, v.Postings = []string{}, []JobPostingView{}
+			role = &v
+			byRole[v.RoleID] = role
+			order = append(order, v.RoleID)
+		}
+		role.Postings = append(role.Postings, p)
+		// Netflix sorts first: its stated range wins
+		if role.SalaryMin == nil && p.SalaryMin != nil {
+			role.SalaryMin, role.SalaryMax = p.SalaryMin, p.SalaryMax
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	roles := make([]JobRoleView, 0, len(order))
+	for _, id := range order {
+		roles = append(roles, summarizeRole(*byRole[id]))
+	}
+	return roles, nil
+}
+
 func utc(t *time.Time) *time.Time {
 	if t == nil {
 		return nil
@@ -474,7 +539,8 @@ func utc(t *time.Time) *time.Time {
 }
 
 // summarizeRole fills a role's posted/gone dates and locations from its
-// postings: live postings count while there are any.
+// postings: live postings count while there are any, and the role is as
+// new as its latest posting (a repost is news).
 func summarizeRole(v JobRoleView) JobRoleView {
 	var live []JobPostingView
 	for _, p := range v.Postings {
@@ -493,7 +559,7 @@ func summarizeRole(v JobRoleView) JobRoleView {
 	}
 	seen := map[string]bool{}
 	for _, p := range use {
-		if p.PostedAt != nil && (v.PostedAt == nil || p.PostedAt.Before(*v.PostedAt)) {
+		if p.PostedAt != nil && (v.PostedAt == nil || p.PostedAt.After(*v.PostedAt)) {
 			v.PostedAt = p.PostedAt
 		}
 		if p.Location != "" && !seen[p.Location] {

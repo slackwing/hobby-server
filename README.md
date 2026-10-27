@@ -86,14 +86,19 @@ oldest first:
 
 Admin only (shared auth, global admin) — the Netflix roles watcher
 (`internal/sxiva/jobs*.go`; hourly when the project sets `jobs_watch:
-true`): Software Engineer 5/6 postings from the Netflix careers site and
-LinkedIn's public job search, one role per normalized title (UUIDv5), with
-salary ranges:
+true`): Software Engineer 5/6 postings from Netflix's job site
+(`netflix`, explore.jobs.netflix.net) and LinkedIn's public job search
+(`linkedin`), one role per normalized title (UUIDv5), with each posting's
+description, details, salary range and the posting date the source shows:
 
 - `GET /api/sxiva/jobs` — `{roles: [{role_id, title, favorite, hidden,
   posted_at, gone_at, salary_min, salary_max, locations, postings:
-  [{source, url, location, posted_at, gone_at}]}], checks: [{source,
-  checked_at, ok, error}]}` — every role ever seen, newest posting first
+  [{source, title, url, location, posted_at, gone_at, salary_min,
+  salary_max}]}], checks: [{source, checked_at, ok, error}]}` — every role
+  ever seen, latest posting first
+- `GET /api/sxiva/jobs/roles/{role_id}` — one role, its postings also
+  carrying `description` (the source's HTML — sanitize before showing)
+  and `meta` (`[{label, value}]`)
 - `PATCH /api/sxiva/jobs/roles/{role_id}` `{favorite?, hidden?}`
 - `POST /api/sxiva/jobs/refresh` — check the sources now
 

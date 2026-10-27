@@ -60,13 +60,20 @@ schema-related here, look at how manuscript-studio does it.
   manuscript-studio's `/api/v1/points-daily` with a personal API token
   (config `manuscripts: {base_url, token}` under the sxiva project).
   Also the **Netflix roles watcher** (`jobs*.go`, tables `sxiva_job_*`,
-  changeset 002): hourly (`jobs_watch: true` in the sxiva block) it
-  catalogs SE5/SE6 postings from the careers site's JSON API and
-  LinkedIn's public guest search (never a LinkedIn account), roles keyed
-  by UUIDv5 of the normalized title, salary from each new posting's
-  description; endpoints admin-only via shared auth. `go test` needs
-  `SXIVA_TEST_DB_URL` for the DB-backed watcher test;
-  `SXIVA_JOBS_LIVE=1` runs one real fetch (`jobs_live_test.go`).
+  changesets 002–003): hourly (`jobs_watch: true` in the sxiva block) it
+  catalogs SE5/SE6 postings from two sources — `netflix` (Netflix's own
+  job site, explore.jobs.netflix.net, Eightfold JSON) and `linkedin`
+  (public guest search; never a LinkedIn account) — roles keyed by
+  UUIDv5 of the normalized title ("4/5" → "5", "Engineering" →
+  "Engineer"). Each posting's page is cached (description HTML, labeled
+  `meta`, salary); Netflix's displayed posting date lives only in its
+  detail (`custom_JD.posting_date`, re-read every run — the list's
+  `t_create` is months older), LinkedIn's in its list. A role is as new
+  as its latest posting. LinkedIn 429s bursts: 6 s between requests, 10
+  posting pages per run. Endpoints admin-only via shared auth. `go test`
+  needs `SXIVA_TEST_DB_URL` for the DB-backed watcher test;
+  `SXIVA_JOBS_LIVE=1` runs one real fetch (`jobs_live_test.go`;
+  `SXIVA_JOBS_DUMP=<dir>` writes the API's JSON for page work).
 - **bots** — not a project but a service in the same binary
   (`internal/bots`): bot programs driving `is_bot` users through the
   PUBLIC site API. `hxh_chatbots` is the first (README "Bots"; spec in

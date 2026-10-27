@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        Netflix roles watcher, round two:
+        - the Netflix job site's source name is "netflix" (was "careers");
+        - each posting keeps its page: description (the source's HTML),
+          meta (its labeled details, [{label, value}] in the source's
+          order) and detail_posted_at (the posting date the source shows,
+          when its list says otherwise — Netflix lists the position's
+          creation, months earlier). detail_at = when the page was last
+          read; it replaces salary_checked_at (the range comes from the
+          same page).
+    -->
+
+    <changeSet id="003-jobs-details" author="sxiva">
+        <update tableName="sxiva_job_listing">
+            <column name="source" value="netflix"/>
+            <where>source = 'careers'</where>
+        </update>
+        <update tableName="sxiva_job_fetch">
+            <column name="source" value="netflix"/>
+            <where>source = 'careers'</where>
+        </update>
+
+        <addColumn tableName="sxiva_job_listing">
+            <column name="description" type="TEXT" defaultValue="">
+                <constraints nullable="false"/>
+            </column>
+            <column name="meta" type="JSONB" defaultValueComputed="'[]'::jsonb">
+                <constraints nullable="false"/>
+            </column>
+            <column name="detail_posted_at" type="TIMESTAMPTZ"/>
+            <column name="detail_at" type="TIMESTAMPTZ"/>
+        </addColumn>
+        <dropColumn tableName="sxiva_job_listing" columnName="salary_checked_at"/>
+    </changeSet>
+
+</databaseChangeLog>

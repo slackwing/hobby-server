@@ -2,8 +2,9 @@ package sxiva
 
 // Netflix roles watcher (admin-only plugin on the status page; feathers
 // html/status/netflix-roles.js). Every hour it catalogs open Software
-// Engineer 5 and 6 roles from two sources — the Netflix careers site and
-// LinkedIn's public (no-login) job search — with their salary ranges.
+// Engineer 5 and 6 roles from two sources — Netflix's own job site
+// (explore.jobs.netflix.net) and LinkedIn's public (no-login) job search —
+// with each posting's description, details and salary range.
 //
 // This file holds the pure parts: titles, role ids, levels, salaries, and
 // parsing each source's responses. Fetching and storage: jobs_watch.go.
@@ -21,7 +22,7 @@ import (
 
 // Sources.
 const (
-	SourceCareers  = "careers"
+	SourceNetflix  = "netflix"
 	SourceLinkedIn = "linkedin"
 )
 
@@ -38,12 +39,46 @@ type Listing struct {
 // jobRoleNamespace = uuid5(NAMESPACE_URL, "https://andrewcheong.com/status/jobs").
 var jobRoleNamespace = [16]byte{0xa2, 0xdf, 0x09, 0xa3, 0x7a, 0xeb, 0x59, 0x2e, 0x91, 0x86, 0x26, 0x1f, 0x85, 0xfb, 0xbc, 0xb2}
 
-// normalizeTitle: lowercase, en/em dashes as "-", whitespace collapsed —
-// so trivial differences between sources don't make a new role.
+// MetaField is one labeled detail of a posting, as its source shows it.
+type MetaField struct {
+	Label string `json:"label"`
+	Value string `json:"value"`
+}
+
+// Detail is what a posting's own page adds to its list entry.
+type Detail struct {
+	Description string      // the source's HTML (the page sanitizes it)
+	Meta        []MetaField // in the source's order
+	PostedAt    *time.Time  // the source's displayed posting date, when the list's differs
+	SalaryText  string      // text to read a "$X - $Y" range from
+}
+
+var (
+	engineeringRe = regexp.MustCompile(`software engineering\b`)
+	levelPairRe   = regexp.MustCompile(`software engineer (\d) ?/ ?(\d)`)
+)
+
+// normalizeTitle: lowercase, en/em dashes as "-", whitespace collapsed,
+// "engineering" as "engineer", and a level pair narrowed to the levels we
+// keep ("4/5" → "5") — so the ways sources spell one role don't make two.
 func normalizeTitle(t string) string {
 	t = strings.ToLower(t)
 	t = strings.NewReplacer("–", "-", "—", "-").Replace(t)
-	return strings.Join(strings.Fields(t), " ")
+	t = strings.Join(strings.Fields(t), " ")
+	t = engineeringRe.ReplaceAllString(t, "software engineer")
+	return levelPairRe.ReplaceAllStringFunc(t, func(m string) string {
+		p := levelPairRe.FindStringSubmatch(m)
+		var keep []string
+		for _, l := range p[1:] {
+			if l == "5" || l == "6" {
+				keep = append(keep, l)
+			}
+		}
+		if len(keep) == 0 {
+			return m
+		}
+		return "software engineer " + strings.Join(keep, "/")
+	})
 }
 
 // RoleID is the role's UUID: a version-5 (SHA-1) UUID of its normalized
@@ -113,11 +148,13 @@ func htmlText(s string) string {
 	return strings.Join(strings.Fields(html.UnescapeString(tagRe.ReplaceAllString(s, " "))), " ")
 }
 
-// ---- careers site (Eightfold JSON) ----------------------------------------
+// ---- Netflix job site (explore.jobs.netflix.net, Eightfold JSON) ------------
 
-// parseCareersList reads one page of /api/apply/v2/jobs: the total match
-// count and the page's positions.
-func parseCareersList(body []byte) (int, []Listing, error) {
+// parseNetflixList reads one page of /api/apply/v2/jobs: the total match
+// count and the page's positions. PostedAt here is the position's creation
+// (t_create) — often months before the posting date the site shows, which
+// only the detail has (parseNetflixDetail).
+func parseNetflixList(body []byte) (int, []Listing, error) {
 	var resp struct {
 		Count     int `json:"count"`
 		Positions []struct {
@@ -129,12 +166,12 @@ func parseCareersList(body []byte) (int, []Listing, error) {
 		} `json:"positions"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return 0, nil, fmt.Errorf("careers list: %w", err)
+		return 0, nil, fmt.Errorf("netflix list: %w", err)
 	}
 	out := make([]Listing, 0, len(resp.Positions))
 	for _, p := range resp.Positions {
 		out = append(out, Listing{
-			Source:     SourceCareers,
+			Source:     SourceNetflix,
 			ExternalID: p.ID.String(),
 			Title:      strings.TrimSpace(p.Name),
 			Location:   strings.TrimSpace(p.Location),
@@ -145,15 +182,60 @@ func parseCareersList(body []byte) (int, []Listing, error) {
 	return resp.Count, out, nil
 }
 
-// parseCareersDetail returns a position's description as text.
-func parseCareersDetail(body []byte) (string, error) {
+// parseNetflixDetail reads /api/apply/v2/jobs/{id}: the description, the
+// labeled fields the site lists beside it (custom_JD), the position's own
+// fields, and the displayed posting date.
+func parseNetflixDetail(body []byte) (Detail, error) {
 	var resp struct {
-		Description string `json:"job_description"`
+		Description  string   `json:"job_description"`
+		Department   string   `json:"department"`
+		BusinessUnit string   `json:"business_unit"`
+		Locations    []string `json:"locations"`
+		WorkLocation *string  `json:"work_location_option"`
+		Flexibility  *string  `json:"location_flexibility"`
+		TCreate      int64    `json:"t_create"`
+		CustomJD     struct {
+			Fields  map[string][]string `json:"data_fields"`
+			Display []struct {
+				Label string `json:"label"`
+				Value string `json:"value"`
+			} `json:"display"`
+		} `json:"custom_JD"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return "", fmt.Errorf("careers detail: %w", err)
+		return Detail{}, fmt.Errorf("netflix detail: %w", err)
 	}
-	return htmlText(resp.Description), nil
+	d := Detail{Description: resp.Description, SalaryText: htmlText(resp.Description)}
+	add := func(label, value string) {
+		if value = strings.TrimSpace(value); value != "" {
+			d.Meta = append(d.Meta, MetaField{label, value})
+		}
+	}
+	for _, f := range resp.CustomJD.Display {
+		values := resp.CustomJD.Fields[f.Value]
+		if f.Value == "posting_date" {
+			if len(values) > 0 {
+				if t, err := time.Parse("01-02-2006", strings.TrimSpace(values[0])); err == nil {
+					d.PostedAt = &t
+				}
+			}
+			continue // shown as the posting's date
+		}
+		add(f.Label, strings.Join(values, ", "))
+	}
+	add("Department", resp.Department)
+	add("Business unit", resp.BusinessUnit)
+	add("Locations", strings.Join(resp.Locations, "; "))
+	if resp.WorkLocation != nil {
+		add("Work location", *resp.WorkLocation)
+	}
+	if resp.Flexibility != nil {
+		add("Location flexibility", *resp.Flexibility)
+	}
+	if resp.TCreate > 0 {
+		add("Created", time.Unix(resp.TCreate, 0).UTC().Format("2006-01-02"))
+	}
+	return d, nil
 }
 
 // ---- LinkedIn public job search (HTML cards) -------------------------------
@@ -204,4 +286,44 @@ func parseLinkedInList(body []byte, company string) []Listing {
 		out = append(out, l)
 	}
 	return out
+}
+
+var (
+	liDescRe       = regexp.MustCompile(`(?s)<div class="show-more-less-html__markup[^"]*">(.*?)</div>`)
+	liCriterionRe  = regexp.MustCompile(`(?s)<h3 class="description__job-criteria-subheader">(.*?)</h3>\s*<span class="description__job-criteria-text[^"]*">(.*?)</span>`)
+	liApplicantsRe = regexp.MustCompile(`(?s)class="num-applicants__caption[^"]*">(.*?)</`)
+	liPlaceRe      = regexp.MustCompile(`(?s)<span class="topcard__flavor topcard__flavor--bullet">(.*?)</span>`)
+	liPayRe        = regexp.MustCompile(`(?s)<div class="salary compensation__salary">(.*?)</div>`)
+)
+
+// parseLinkedInDetail reads a /jobs-guest/jobs/api/jobPosting/{id} page:
+// the description, the job criteria (seniority, employment type, function,
+// industries), location, applicants and any stated pay.
+func parseLinkedInDetail(body []byte) Detail {
+	page := string(body)
+	var d Detail
+	if m := liDescRe.FindStringSubmatch(page); m != nil {
+		d.Description = strings.TrimSpace(m[1])
+	}
+	add := func(label, value string) {
+		if value = htmlText(value); value != "" {
+			d.Meta = append(d.Meta, MetaField{label, value})
+		}
+	}
+	if m := liPlaceRe.FindStringSubmatch(page); m != nil {
+		add("Location", m[1])
+	}
+	for _, m := range liCriterionRe.FindAllStringSubmatch(page, -1) {
+		add(htmlText(m[1]), m[2])
+	}
+	if m := liApplicantsRe.FindStringSubmatch(page); m != nil {
+		add("Applicants", strings.TrimSuffix(htmlText(m[1]), " applicants"))
+	}
+	pay := ""
+	if m := liPayRe.FindStringSubmatch(page); m != nil {
+		pay = htmlText(m[1])
+		add("Pay", pay)
+	}
+	d.SalaryText = pay + " " + htmlText(d.Description)
+	return d
 }

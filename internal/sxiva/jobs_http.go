@@ -5,6 +5,7 @@ package sxiva
 // the writes):
 //
 //	GET   /jobs                    every role (live, gone, hidden), sources combined
+//	GET   /jobs/roles/{role_id}    one role, with each posting's description and details
 //	PATCH /jobs/roles/{role_id}    {favorite?, hidden?}
 //	POST  /jobs/refresh            check the sources now
 
@@ -31,6 +32,7 @@ func mountJobs(r chi.Router, store *Store, jobs *Jobs) {
 	r.Group(func(g chi.Router) {
 		g.Use(shared.RequireAdmin(jobs.Admin))
 		g.Get("/jobs", handleJobs(store))
+		g.Get("/jobs/roles/{role_id}", handleJobRoleDetail(store))
 		g.Patch("/jobs/roles/{role_id}", handleJobRole(store))
 		g.Post("/jobs/refresh", func(w http.ResponseWriter, _ *http.Request) {
 			jobs.Watcher.Trigger()
@@ -48,6 +50,27 @@ func handleJobs(store *Store) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"roles": roles, "checks": checks})
+	}
+}
+
+func handleJobRoleDetail(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		roleID := chi.URLParam(r, "role_id")
+		if !uuidRe.MatchString(roleID) {
+			writeError(w, http.StatusBadRequest, "bad role_id")
+			return
+		}
+		role, err := store.JobRole(roleID)
+		if err != nil {
+			log.Printf("[jobs] role %s: %v", roleID, err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		if role == nil {
+			writeError(w, http.StatusNotFound, "no such role")
+			return
+		}
+		writeJSON(w, http.StatusOK, role)
 	}
 }
 

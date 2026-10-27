@@ -2,6 +2,7 @@ package sxiva
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -27,8 +28,21 @@ func TestRoleIDIsUUIDv5OfTheNormalizedTitle(t *testing.T) {
 			t.Errorf("RoleID(%q) = %s, want %s", title, got, want)
 		}
 	}
-	if RoleID("Software Engineer 5 – iOS") != RoleID("Software Engineer 5 - iOS") {
-		t.Error("an en dash and a hyphen must give the same role")
+	same := [][2]string{
+		{"Software Engineer 5 – iOS", "Software Engineer 5 - iOS"}, // en dash
+		{"Software Engineer 4/5 – Model Development and Management, AI Platform", "Software Engineer 5 – Model Development and Management, AI Platform"},
+		{"Software Engineering 5 - Ads Agent", "Software Engineer 5 - Ads Agent"},
+	}
+	for _, c := range same {
+		if RoleID(c[0]) != RoleID(c[1]) {
+			t.Errorf("%q and %q must be one role", c[0], c[1])
+		}
+	}
+	if RoleID("Software Engineer 5/6 - Streaming") == RoleID("Software Engineer 5 - Streaming") {
+		t.Error("5/6 keeps both levels")
+	}
+	if got := normalizeTitle("Software Engineer 3/4 - X"); got != "software engineer 3/4 - x" {
+		t.Errorf("a pair with no kept level is left alone: %q", got)
 	}
 }
 
@@ -82,8 +96,17 @@ func TestParseSalary(t *testing.T) {
 	}
 }
 
-func TestParseCareers(t *testing.T) {
-	count, list, err := parseCareersList(fixture(t, "careers-list.json"))
+func metaValue(meta []MetaField, label string) (string, bool) {
+	for _, m := range meta {
+		if m.Label == label {
+			return m.Value, true
+		}
+	}
+	return "", false
+}
+
+func TestParseNetflix(t *testing.T) {
+	count, list, err := parseNetflixList(fixture(t, "netflix-list.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,15 +116,35 @@ func TestParseCareers(t *testing.T) {
 	first := list[0]
 	if first.ExternalID != "790318081427" || first.Title != "Software Engineer 5 – Model Development and Management, AI Platform" ||
 		first.Location != "Remote, United States" || first.URL != "https://explore.jobs.netflix.net/careers/job/790318081427" ||
-		first.PostedAt.Format("2006-01-02") != "2026-08-24" || first.Source != SourceCareers {
+		first.PostedAt.Format("2006-01-02") != "2026-08-24" || first.Source != SourceNetflix {
 		t.Errorf("first position: %+v", first)
 	}
-	text, err := parseCareersDetail(fixture(t, "careers-detail.json"))
+
+	d, err := parseNetflixDetail(fixture(t, "netflix-detail.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if lo, hi := parseSalary(text); lo == nil || *lo != 320000 || *hi != 500000 {
-		t.Errorf("careers detail salary: %v %v from %q", lo, hi, text)
+	if d.PostedAt == nil || d.PostedAt.Format("2006-01-02") != "2026-10-23" {
+		t.Errorf("posted %v: want the site's Job Posting Date (2026-10-23), not t_create (2026-08-21)", d.PostedAt)
+	}
+	if lo, hi := parseSalary(d.SalaryText); lo == nil || *lo != 320000 || *hi != 500000 {
+		t.Errorf("netflix detail salary: %v %v", lo, hi)
+	}
+	if !strings.HasPrefix(d.Description, "<p>At Netflix, our mission") {
+		t.Errorf("description keeps the HTML: %.60q", d.Description)
+	}
+	want := []MetaField{
+		{"Job Requisition ID", "JR42274"}, {"Teams", "Engineering"}, {"Work Type", "Remote"},
+		{"Department", "Engineering"}, {"Business unit", "Streaming"}, {"Locations", "Remote, United States"},
+		{"Created", "2026-08-21"},
+	}
+	if len(d.Meta) != len(want) {
+		t.Fatalf("meta %+v", d.Meta)
+	}
+	for i := range want {
+		if d.Meta[i] != want[i] {
+			t.Errorf("meta[%d] = %+v, want %+v (empty fields and the posting date are left out)", i, d.Meta[i], want[i])
+		}
 	}
 }
 
@@ -124,7 +167,23 @@ func TestParseLinkedIn(t *testing.T) {
 	if other := parseLinkedInList(fixture(t, "linkedin-list.html"), "Some Other Co"); len(other) != 0 {
 		t.Errorf("cards from another company must be skipped, got %d", len(other))
 	}
-	if lo, hi := parseSalary(htmlText(string(fixture(t, "linkedin-detail.html")))); lo == nil || hi == nil || *lo >= *hi {
+
+	d := parseLinkedInDetail(fixture(t, "linkedin-detail.html"))
+	if lo, hi := parseSalary(d.SalaryText); lo == nil || *lo != 388000 || *hi != 558000 {
 		t.Errorf("linkedin detail salary: %v %v", lo, hi)
+	}
+	if !strings.HasPrefix(d.Description, "At Netflix, our mission") || strings.Contains(d.Description, "show-more-less") {
+		t.Errorf("description is the posting's own markup: %.80q", d.Description)
+	}
+	for label, want := range map[string]string{
+		"Location": "United States", "Seniority level": "Not Applicable", "Employment type": "Full-time",
+		"Industries": "Entertainment Providers", "Applicants": "Over 200",
+	} {
+		if got, ok := metaValue(d.Meta, label); !ok || got != want {
+			t.Errorf("meta %q = %q, want %q (all: %+v)", label, got, want, d.Meta)
+		}
+	}
+	if d.PostedAt != nil {
+		t.Error("LinkedIn's list already dates the posting")
 	}
 }
