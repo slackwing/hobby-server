@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+
+    <!--
+        Register the status website (andrewcheong.com/status/, the sxiva
+        project) in the shared auth system (2026-10-28, Andrew): the page
+        itself is public; a role here opens the admin-only Netflix Roles
+        card READ-ONLY — writes (star, hide, seen, refresh) stay the
+        global admin's (internal/sxiva/jobs_http.go). andrew administers
+        it; tampopo is a viewer.
+    -->
+
+    <changeSet id="010-status-website" author="admin">
+
+        <insert tableName="hobby_server_websites">
+            <column name="website" value="status"/>
+        </insert>
+
+        <insert tableName="hobby_server_website_roles">
+            <column name="website" value="status"/>
+            <column name="role" value="admin"/>
+        </insert>
+        <insert tableName="hobby_server_website_roles">
+            <column name="website" value="status"/>
+            <column name="role" value="viewer"/>
+            <column name="is_default" valueBoolean="true"/>
+        </insert>
+
+        <insert tableName="hobby_server_user_roles">
+            <column name="username" value="andrew"/>
+            <column name="website" value="status"/>
+            <column name="role" value="admin"/>
+        </insert>
+        <insert tableName="hobby_server_user_roles">
+            <column name="username" value="tampopo"/>
+            <column name="website" value="status"/>
+            <column name="role" value="viewer"/>
+        </insert>
+
+    </changeSet>
+
+</databaseChangeLog>

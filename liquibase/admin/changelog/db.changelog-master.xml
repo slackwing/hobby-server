@@ -26,5 +26,6 @@
     <include file="changelog/008-anonymous.xml"/>
     <include file="changelog/009-default-role.xml"/>
     <include file="changelog/009-hxh-no-player.xml"/>
+    <include file="changelog/010-status-website.xml"/>
 
 </databaseChangeLog>

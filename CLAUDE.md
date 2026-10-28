@@ -69,7 +69,10 @@ schema-related here, look at how manuscript-studio does it.
   `meta`, salary); Netflix's displayed posting date lives only in its
   detail (`custom_JD.posting_date`, re-read every run — the list's
   `t_create` is months older), LinkedIn's in its list. A role is as new
-  as its latest posting. Filters (Andrew's): no iOS / Android / Security
+  as its latest posting. Access: GETs for the global admin or a role on
+  shared-auth website `status` (admin changeset 010: andrew admin,
+  tampopo viewer — read-only); PATCH/POST global admin only
+  (`requireJobs`, jobs_http.go; TestJobsAccess). Filters (Andrew's): no iOS / Android / Security
   roles (by title) from either source; LinkedIn kept to New York / NYC / bare-country ("United
   States", "US", "USA") / blank locations — filtered postings are DELETED,
   not marked gone. LinkedIn 429s bursts: 6 s between requests, 10

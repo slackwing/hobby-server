@@ -84,7 +84,9 @@ oldest first:
   manuscript-studio can't be reached
 - `GET /api/sxiva/health`
 
-Admin only (shared auth, global admin) — the Netflix roles watcher
+Shared auth — reads (the two GETs) for the global admin or anyone with a
+role on website `status` (tampopo: `viewer`, read-only); writes (PATCH,
+POST) for the global admin only — the Netflix roles watcher
 (`internal/sxiva/jobs*.go`; hourly when the project sets `jobs_watch:
 true`): Software Engineer 5/6 postings from Netflix's job site
 (`netflix`, explore.jobs.netflix.net, remote) and LinkedIn's public job

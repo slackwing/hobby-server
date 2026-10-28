@@ -319,7 +319,8 @@ func main() {
 		// sxiva needs no shared auth, so unlike hxh/bap it mounts without it.
 		if sxivaProject != nil {
 			sxivaStore := sxiva.NewStore(sxivaPool)
-			// The roles watcher's endpoints need the shared auth (admin only).
+			// The roles watcher's endpoints need the shared auth (admin; reads
+			// also anyone with a role on the status site).
 			var jobs *sxiva.Jobs
 			if adminStore != nil {
 				jobs = &sxiva.Jobs{Watcher: sxiva.NewJobWatcher(sxivaStore), Admin: adminStore}
