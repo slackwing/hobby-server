@@ -74,8 +74,12 @@ schema-related here, look at how manuscript-studio does it.
   tampopo viewer — read-only); PATCH/POST global admin only
   (`requireJobs`, jobs_http.go; TestJobsAccess). Filters (Andrew's): no iOS / Android / Security
   roles (by title) from either source; LinkedIn kept to New York / NYC / bare-country ("United
-  States", "US", "USA") / blank locations — filtered postings are DELETED,
-  not marked gone. LinkedIn 429s bursts: 6 s between requests, 10
+  States", "US", "USA") / blank locations. Title-filtered postings are
+  DELETED (not gone). Location: LinkedIn ROTATES a multi-city posting's
+  shown city between fetches (Ads Identity Graph: LA → New York → Los
+  Gatos), so a posting once kept stays live (its New York location kept)
+  when it next reads elsewhere — the place filter only stops new ones;
+  deleting on a flip made roles vanish without red (fixed 2026-10-29). LinkedIn 429s bursts: 6 s between requests, 10
   posting pages per run. Endpoints admin-only via shared auth. `go test`
   needs `SXIVA_TEST_DB_URL` for the DB-backed watcher test;
   `SXIVA_JOBS_LIVE=1` runs one real fetch (`jobs_live_test.go`;

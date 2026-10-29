@@ -48,7 +48,7 @@ func (f fakeJobsAuth) MayAct(user, website string) (bool, error) {
 func TestJobsAccess(t *testing.T) {
 	store := jobsTestStore(t)
 	title := "Software Engineer 5 - Access Check"
-	if _, err := store.SaveListings(SourceNetflix, []Listing{{Source: SourceNetflix, ExternalID: "1", Title: title, PostedAt: time.Now().UTC()}}, nil); err != nil {
+	if _, err := store.SaveListings(SourceNetflix, []Listing{{Source: SourceNetflix, ExternalID: "1", Title: title, PostedAt: time.Now().UTC()}}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	role := RoleID(title)

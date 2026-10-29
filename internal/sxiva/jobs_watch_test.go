@@ -231,20 +231,34 @@ func TestJobWatcherEndToEnd(t *testing.T) {
 		t.Errorf("limit: %d %v", len(few), err)
 	}
 
-	// A kept posting that moves somewhere unwanted is dropped outright — not
-	// "gone" (it's still up, just not wanted), so no red card.
+	// LinkedIn shows a multi-city posting under a different one of its
+	// cities from fetch to fetch (seen live: Ads Identity Graph went Los
+	// Angeles → New York → Los Gatos in two days). A posting already kept
+	// stays live and keeps its New York location — it must not vanish; a
+	// posting never seen in New York is still not kept. Only leaving the
+	// list makes it gone (red).
+	adsAgent := "Software Engineering 5 - Ads Agent (Agentic Platform for Enterprise)"
 	fake.linkedInList.Store(strings.Replace(list, "New York, NY", "Los Angeles, CA", 1))
 	w.RunOnce(ctx)
 	roles, _, _ = store.JobsView()
-	if findRole(roles, "Software Engineering 5 - Ads Agent (Agentic Platform for Enterprise)") != nil || len(roles) != 6 {
-		t.Fatalf("Ads Agent moved to Los Angeles: should be dropped, %d roles left", len(roles))
+	if a := findRole(roles, adsAgent); a == nil || a.GoneAt != nil || a.Postings[0].GoneAt != nil || a.Locations[0] != "New York, NY" || len(roles) != 7 {
+		t.Fatalf("Ads Agent shown in Los Angeles this time: must stay live, in New York (%d roles): %+v", len(roles), a)
 	}
-	for _, r := range roles {
-		if r.GoneAt != nil {
-			t.Errorf("%q is gone — filtering must not mark anything gone", r.Title)
-		}
+	if findRole(roles, "Software Engineer 6 - Creative Studio") != nil {
+		t.Error("a posting never seen in New York must still not be kept")
+	}
+	fake.linkedInList.Store(strings.Replace(list, linkedInCard(list, "4468375380", "4468375380"), "", 1))
+	w.RunOnce(ctx)
+	roles, _, _ = store.JobsView()
+	if a := findRole(roles, adsAgent); a == nil || a.GoneAt == nil {
+		t.Fatalf("Ads Agent left LinkedIn's list: it must show gone (red), not vanish: %+v", a)
 	}
 	fake.linkedInList.Store(list)
+	w.RunOnce(ctx)
+	roles, _, _ = store.JobsView()
+	if a := findRole(roles, adsAgent); a == nil || a.GoneAt != nil {
+		t.Fatalf("Ads Agent back on the list: live again: %+v", a)
+	}
 
 	// A Netflix posting disappears: its posting is gone; a Netflix-only
 	// role is gone, TV Product UI stays live through LinkedIn.

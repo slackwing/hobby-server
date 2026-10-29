@@ -121,21 +121,25 @@ func (w *JobWatcher) runSource(ctx context.Context, source string,
 	}
 	seen := map[string]bool{}
 	var (
-		kept     []Listing
-		unwanted []string // the level fits, the role or place doesn't
+		kept      []Listing
+		unwanted  []string // an unwanted role (iOS…): dropped, stored or not
+		elsewhere []string // shown in an unwanted place this time: see SaveListings
 	)
 	for _, l := range all {
 		if !wantedLevel(l.Title) || seen[l.ExternalID] {
 			continue
 		}
 		seen[l.ExternalID] = true
-		if unwantedRole(l.Title) || (place != nil && !place(l.Location)) {
+		switch {
+		case unwantedRole(l.Title):
 			unwanted = append(unwanted, l.ExternalID)
-			continue
+		case place != nil && !place(l.Location):
+			elsewhere = append(elsewhere, l.ExternalID)
+		default:
+			kept = append(kept, l)
 		}
-		kept = append(kept, l)
 	}
-	added, err := w.store.SaveListings(source, kept, unwanted)
+	added, err := w.store.SaveListings(source, kept, unwanted, elsewhere)
 	if err != nil {
 		log.Printf("[jobs] %s: save: %v", source, err)
 		_ = w.store.RecordJobFetch(source, false, "save failed", 0)
@@ -289,12 +293,15 @@ func (w *JobWatcher) linkedInDetail(ctx context.Context, l Listing) (Detail, err
 // ---- storage -----------------------------------------------------------------
 
 // SaveListings records a successful fetch: roles and postings upserted
-// (a posting that was gone and is back is live again), postings filtered
-// out (drop: an unwanted role or place) deleted — not gone: they're still
-// up, just not wanted — and the source's live postings it didn't find
-// marked gone.
+// (a posting that was gone and is back is live again); postings of an
+// unwanted role (drop) deleted — not gone: they're still up, just not
+// wanted; postings listed this time in an unwanted place (elsewhere) left
+// as they were but live — LinkedIn shows a multi-city posting under a
+// different one of its cities from fetch to fetch, so one kept for New
+// York must not vanish when it next reads Los Gatos (one never kept stays
+// out); and the source's live postings it didn't find marked gone.
 // Returns how many postings were new.
-func (s *Store) SaveListings(source string, ls []Listing, drop []string) (int, error) {
+func (s *Store) SaveListings(source string, ls []Listing, drop, elsewhere []string) (int, error) {
 	ctx, cancel := withCtx()
 	defer cancel()
 	tx, err := s.pool.Begin(ctx)
@@ -332,6 +339,14 @@ func (s *Store) SaveListings(source string, ls []Listing, drop []string) (int, e
 			added++
 		}
 		ids = append(ids, l.ExternalID)
+	}
+	if len(elsewhere) > 0 {
+		if _, err := tx.Exec(ctx, `
+			UPDATE sxiva_job_listing SET last_seen_at = NOW(), gone_at = NULL
+			WHERE source = $1 AND external_id = ANY($2)`, source, elsewhere); err != nil {
+			return 0, err
+		}
+		ids = append(ids, elsewhere...)
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE sxiva_job_listing SET gone_at = NOW()

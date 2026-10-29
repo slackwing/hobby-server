@@ -139,11 +139,12 @@ var (
 )
 
 // wantedLinkedInPlace: LinkedIn's US search also lists on-site jobs in
-// Los Gatos, LA, Seattle…; Andrew wants New York only, so a posting stays
-// when its location mentions New York / NYC, is just the country ("United
-// States", "US", "USA" — how LinkedIn labels Netflix's remote US jobs; a
-// "Remote" beside it is fine), or is missing. "Los Gatos, CA, United
-// States" names a city: dropped.
+// Los Gatos, LA, Seattle…; Andrew wants New York only, so a posting is
+// kept when its location mentions New York / NYC, is just the country
+// ("United States", "US", "USA" — how LinkedIn labels Netflix's remote US
+// jobs; a "Remote" beside it is fine), or is missing. "Los Gatos, CA,
+// United States" names a city: not kept — unless it was kept before
+// (LinkedIn rotates a multi-city posting's city; SaveListings).
 func wantedLinkedInPlace(location string) bool {
 	if newYorkRe.MatchString(location) {
 		return true
