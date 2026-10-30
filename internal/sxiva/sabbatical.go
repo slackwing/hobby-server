@@ -22,7 +22,7 @@ const (
 type SabbaticalDay struct {
 	Date   string `json:"date"`
 	Green  int    `json:"green"`  // manuscript-studio points (the page caps them)
-	Red    int    `json:"red"`    // [nflx] minutes
+	Red    int    `json:"red"`    // [nflx] + [leet] minutes
 	Orange int    `json:"orange"` // [crco] minutes
 	White  int    `json:"white"`  // [staff] minutes
 	Yellow int    `json:"yellow"` // [abi] + [hxh] + [rv] minutes
@@ -41,7 +41,7 @@ var sabbaticalMinutes = []struct {
 	codes []string
 	set   func(*SabbaticalDay, int)
 }{
-	{[]string{"nflx"}, func(d *SabbaticalDay, n int) { d.Red = n }},
+	{[]string{"nflx", "leet"}, func(d *SabbaticalDay, n int) { d.Red = n }},
 	{[]string{"crco"}, func(d *SabbaticalDay, n int) { d.Orange = n }},
 	{[]string{"staff"}, func(d *SabbaticalDay, n int) { d.White = n }},
 	{[]string{"crit"}, func(d *SabbaticalDay, n int) { d.Purple = n }},

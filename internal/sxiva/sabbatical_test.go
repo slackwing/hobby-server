@@ -52,8 +52,9 @@ func TestSabbatical(t *testing.T) {
 			Exe: f64(1),
 			Alc: f64(0),
 		},
-		{Date: day("2026-10-02"), CategoryMinutes: map[string]int64{"rv": 9, "abi": 1}}, // 10 → 1
-		{Date: day("2026-10-03"), CategoryMinutes: map[string]int64{"art": 300}},        // nothing → left out
+		{Date: day("2026-10-02"), CategoryMinutes: map[string]int64{"rv": 9, "abi": 1}},    // 10 → 1
+		{Date: day("2026-10-03"), CategoryMinutes: map[string]int64{"art": 300}},           // nothing → left out
+		{Date: day("2026-10-04"), CategoryMinutes: map[string]int64{"nflx": 3, "leet": 3}}, // red: summed first, 6 → 1
 	}
 	points := map[string]int{"2026-10-01": 13, "2026-10-05": 4}
 	got := Sabbatical(days, points)
@@ -61,6 +62,7 @@ func TestSabbatical(t *testing.T) {
 		{Date: "2026-10-01", Green: 13, Red: 3, Orange: 1, White: 0, // points are passed through uncapped
 			Yellow: 1, Blue: 4, Brown: 2, Purple: 6},
 		{Date: "2026-10-02", Yellow: 1},
+		{Date: "2026-10-04", Red: 1},
 		{Date: "2026-10-05", Green: 4}, // points on a day with no minutes file
 	}
 	if len(got) != len(want) {
@@ -72,7 +74,7 @@ func TestSabbatical(t *testing.T) {
 		}
 	}
 
-	if out := Sabbatical(days, nil); len(out) != 2 || out[0].Green != 0 {
+	if out := Sabbatical(days, nil); len(out) != 3 || out[0].Green != 0 {
 		t.Errorf("without points: %+v", out)
 	}
 	if out := Sabbatical(nil, nil); out == nil || len(out) != 0 {
