@@ -2,6 +2,7 @@ package sxiva
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,7 +19,7 @@ func TestSquaresFromMinutes(t *testing.T) {
 	}
 }
 
-func TestBlueSquares(t *testing.T) {
+func TestHealthSquares(t *testing.T) {
 	cases := []struct {
 		exe, alc *float64
 		want     int
@@ -35,7 +36,7 @@ func TestBlueSquares(t *testing.T) {
 		{f64(0.4), nil, 0, "less than half an [exe] earns nothing"},
 	}
 	for _, c := range cases {
-		if got := blueSquares(Day{Exe: c.exe, Alc: c.alc}); got != c.want {
+		if got := healthSquares(Day{Exe: c.exe, Alc: c.alc}); got != c.want {
 			t.Errorf("%s: got %d, want %d", c.why, got, c.want)
 		}
 	}
@@ -59,11 +60,11 @@ func TestSabbatical(t *testing.T) {
 	points := map[string]int{"2026-10-01": 13, "2026-10-05": 4}
 	got := Sabbatical(days, points)
 	want := []SabbaticalDay{
-		{Date: "2026-10-01", Green: 13, Red: 3, Orange: 1, White: 0, // points are passed through uncapped
-			Yellow: 1, Blue: 4, Brown: 2, Purple: 6},
-		{Date: "2026-10-02", Yellow: 1},
-		{Date: "2026-10-04", Red: 1},
-		{Date: "2026-10-05", Green: 4}, // points on a day with no minutes file
+		{Date: "2026-10-01", Writing: 13, Netflix: 3, CrucialConversations: 1, StaffEngineer: 0, // points are passed through uncapped
+			Abi: 1, Health: 4, Editing: 2, CriticalReading: 6},
+		{Date: "2026-10-02", Abi: 1},
+		{Date: "2026-10-04", Netflix: 1},
+		{Date: "2026-10-05", Writing: 4}, // points on a day with no minutes file
 	}
 	if len(got) != len(want) {
 		t.Fatalf("got %d days %+v, want %d", len(got), got, len(want))
@@ -74,7 +75,7 @@ func TestSabbatical(t *testing.T) {
 		}
 	}
 
-	if out := Sabbatical(days, nil); len(out) != 3 || out[0].Green != 0 {
+	if out := Sabbatical(days, nil); len(out) != 3 || out[0].Writing != 0 {
 		t.Errorf("without points: %+v", out)
 	}
 	if out := Sabbatical(nil, nil); out == nil || len(out) != 0 {
@@ -119,5 +120,17 @@ func TestWritingSource(t *testing.T) {
 	bad := NewWritingSource(srv.URL+"/manuscripts", "mst_wrong")
 	if _, err := bad.Points(context.Background()); err == nil || !strings.Contains(err.Error(), "401") || strings.Contains(err.Error(), "mst_wrong") {
 		t.Fatalf("a rejected token must error (status, no token): %v", err)
+	}
+}
+
+// The page reads these keys (feathers html/status/sabbatical-27.js schema types).
+func TestSabbaticalJSONKeys(t *testing.T) {
+	b, err := json.Marshal(SabbaticalDay{Date: "2026-11-07"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"date":"2026-11-07","writing":0,"netflix":0,"crucial-conversations":0,"staff-engineer":0,"abi":0,"health":0,"editing":0,"critical-reading":0}`
+	if string(b) != want {
+		t.Errorf("JSON\n got  %s\n want %s", b, want)
 	}
 }
